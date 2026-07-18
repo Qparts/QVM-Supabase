@@ -41,7 +41,9 @@ serve(async (req) => {
     const body = (await req.json()) as CreateVendorUserBody;
     const vendorId = Number(body.vendor_id);
     const email = String(body.email || "").trim();
-    const password = String(body.password || "");
+    // Default to the shared vendor password when the caller doesn't provide one, so vendors
+    // created from any flow can log in immediately (QNEW). Stored hashed by the Admin API.
+    const password = String(body.password || "").trim() || "123456";
     const userName = String(body.user_name || "").trim();
     const role = body.role;
     const branchIds = Array.isArray(body.branch_ids) ? body.branch_ids.map(Number) : [];

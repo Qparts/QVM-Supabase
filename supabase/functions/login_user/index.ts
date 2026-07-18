@@ -39,14 +39,19 @@ serve(async (req)=>{
         headers: corsHeaders
       });
     }
-    // Use the authorization header from the request if provided
-    const authHeader = req.headers.get("Authorization");
+    // IMPORTANT: do NOT forward the caller's Authorization header here.
+    // supabase-js's functions.invoke() automatically attaches the browser's *stored* access
+    // token as `Authorization: Bearer <jwt>`. If that token is stale/expired (a leftover from a
+    // previous session in localStorage), forwarding it to GoTrue's /token endpoint makes it reject
+    // the request as an invalid/expired token BEFORE the password is ever checked — so login keeps
+    // failing until the user clears their browser cache or switches browser. signInWithPassword
+    // only needs the anon apikey, which createClient sends on its own. Always use a clean anon
+    // client with no forwarded user token, and don't persist any state on the server.
     const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-      global: {
-        headers: {
-          Authorization: authHeader || `Bearer ${Deno.env.get("SUPABASE_ANON_KEY")}`
-        }
-      }
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+      },
     });
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
