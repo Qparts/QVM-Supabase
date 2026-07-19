@@ -1,8 +1,9 @@
 // supabase/functions/bulk_update_items_in_sheet/index.ts
 // Takes a chunk of quotation_item_ids and syncs their current DB values into the
 // "Spare Part" AppSheet table (same sheet write_item_to_sheet / update_item_status_in_sheet /
-// update_item_description_in_sheet / write_price_to_sheet already write to), batched into a
-// handful of AppSheet API calls instead of one call per item.
+// update_item_description_in_sheet / write_price_to_sheet already write to). The whole chunk is
+// synced in at most 3 AppSheet API calls total (one Find, one Edit, one Add) instead of one call
+// per item.
 //
 // Rows are matched to sheet rows via "quotation_item_id" (lowercase field name in AppSheet's
 // underlying data, though its Filter() column reference is case-insensitive). Existing rows get
@@ -20,7 +21,6 @@ const TABLE_NAME = Deno.env.get("APPSHEET_TABLE_NAME") ?? "Spare Part";
 const APPSHEET_BASE = `https://api.appsheet.com/api/v2/apps/${APP_ID}/tables/${encodeURIComponent(TABLE_NAME)}/Action`;
 
 const MAX_IDS_PER_REQUEST = 300;
-const APPSHEET_BATCH_SIZE = 25;
 
 async function appsheetCall(body: Record<string, unknown>) {
   const res = await fetch(APPSHEET_BASE, {
@@ -44,38 +44,28 @@ async function appsheetCall(body: Record<string, unknown>) {
   return json;
 }
 
-const chunk = <T,>(arr: T[], size: number): T[][] => {
-  const out: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
-  return out;
-};
-
-// Finds sheet rows for a batch of quotation_item_ids in one call; returns a map of
+// Finds sheet rows for the whole chunk of quotation_item_ids in a single call; returns a map of
 // quotation_item_id (as string) -> AppSheet row key ("ID"), plus the raw selector/response
-// pairs (for debug=true diagnostics).
+// (for debug=true diagnostics).
 async function findRowIds(
   ids: (string | number)[]
-): Promise<{ map: Map<string, string>; debugInfo: Array<{ selector: string; result: unknown }> }> {
+): Promise<{ map: Map<string, string>; selector: string; result: unknown }> {
+  const list = ids.map((id) => `"${String(id).replace(/"/g, '\\"')}"`).join(",");
+  const selector = `Filter("${TABLE_NAME}", IN([quotation_item_id], LIST(${list})))`;
+  const result = await appsheetCall({
+    Action: "Find",
+    Properties: { Selector: selector },
+    Rows: [],
+  });
   const map = new Map<string, string>();
-  const debugInfo: Array<{ selector: string; result: unknown }> = [];
-  for (const batch of chunk(ids, APPSHEET_BATCH_SIZE)) {
-    const list = batch.map((id) => `"${String(id).replace(/"/g, '\\"')}"`).join(",");
-    const selector = `Filter("${TABLE_NAME}", IN([quotation_item_id], LIST(${list})))`;
-    const result = await appsheetCall({
-      Action: "Find",
-      Properties: { Selector: selector },
-      Rows: [],
-    });
-    debugInfo.push({ selector, result });
-    if (Array.isArray(result)) {
-      for (const row of result) {
-        const key = row?.["quotation_item_id"];
-        const id = row?.["ID"];
-        if (key != null && id != null) map.set(String(key), String(id));
-      }
+  if (Array.isArray(result)) {
+    for (const row of result) {
+      const key = row?.["quotation_item_id"];
+      const id = row?.["ID"];
+      if (key != null && id != null) map.set(String(key), String(id));
     }
   }
-  return { map, debugInfo };
+  return { map, selector, result };
 }
 
 serve(async (req) => {
@@ -153,9 +143,9 @@ serve(async (req) => {
       return fields;
     };
 
-    const { map: rowIdMap, debugInfo } = await findRowIds(ids);
+    const { map: rowIdMap, selector, result: findResult } = await findRowIds(ids);
     if (debug) {
-      return new Response(JSON.stringify({ ids, debugInfo }, null, 2), { status: 200 });
+      return new Response(JSON.stringify({ ids, selector, findResult }, null, 2), { status: 200 });
     }
 
     const toEdit: Record<string, unknown>[] = [];
@@ -184,12 +174,8 @@ serve(async (req) => {
       }
     }
 
-    for (const batch of chunk(toEdit, APPSHEET_BATCH_SIZE)) {
-      await appsheetCall({ Action: "Edit", Properties: {}, Rows: batch });
-    }
-    for (const batch of chunk(toAdd, APPSHEET_BATCH_SIZE)) {
-      await appsheetCall({ Action: "Add", Properties: {}, Rows: batch });
-    }
+    if (toEdit.length > 0) await appsheetCall({ Action: "Edit", Properties: {}, Rows: toEdit });
+    if (toAdd.length > 0) await appsheetCall({ Action: "Add", Properties: {}, Rows: toAdd });
 
     for (const id of missing) results[id] = "item_not_found";
 
