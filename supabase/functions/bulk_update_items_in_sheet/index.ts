@@ -2,8 +2,10 @@
 // Takes a chunk of quotation_item_ids and syncs their current DB values into the
 // "Spare Part" AppSheet table (same sheet write_item_to_sheet / update_item_status_in_sheet /
 // update_item_description_in_sheet / write_price_to_sheet already write to). The whole chunk is
-// synced in at most 3 AppSheet API calls total (one Find, one Edit, one Add) instead of one call
-// per item.
+// synced in one Find + one Edit + one Add call. AppSheet rejects an entire Edit/Add call if any
+// single row in it has an invalid value (e.g. a Delivery Status value outside its allowed set) -
+// when that happens, that one call is retried row-by-row so the rest of the chunk still goes
+// through instead of the one bad row blocking everything.
 //
 // Rows are matched to sheet rows via "quotation_item_id" (lowercase field name in AppSheet's
 // underlying data, though its Filter() column reference is case-insensitive). Existing rows get
@@ -66,6 +68,32 @@ async function findRowIds(
     }
   }
   return { map, selector, result };
+}
+
+// Submits an Edit/Add batch in one call; if AppSheet rejects the whole batch (e.g. an invalid
+// enum value on one row), retries each row individually so the rest still go through. Returns
+// per-quotation_item_id outcomes.
+async function submitBatch(
+  action: "Edit" | "Add",
+  rows: Array<{ itemId: number; row: Record<string, unknown> }>,
+  successLabel: string
+): Promise<Record<number, string>> {
+  const outcomes: Record<number, string> = {};
+  if (rows.length === 0) return outcomes;
+  try {
+    await appsheetCall({ Action: action, Properties: {}, Rows: rows.map((r) => r.row) });
+    for (const r of rows) outcomes[r.itemId] = successLabel;
+  } catch (batchErr) {
+    for (const r of rows) {
+      try {
+        await appsheetCall({ Action: action, Properties: {}, Rows: [r.row] });
+        outcomes[r.itemId] = successLabel;
+      } catch (rowErr) {
+        outcomes[r.itemId] = `failed: ${String(rowErr)}`;
+      }
+    }
+  }
+  return outcomes;
 }
 
 serve(async (req) => {
@@ -148,40 +176,44 @@ serve(async (req) => {
       return new Response(JSON.stringify({ ids, selector, findResult }, null, 2), { status: 200 });
     }
 
-    const toEdit: Record<string, unknown>[] = [];
-    const toAdd: Record<string, unknown>[] = [];
-    const results: Record<string, string> = {};
+    const toEdit: Array<{ itemId: number; row: Record<string, unknown> }> = [];
+    const toAdd: Array<{ itemId: number; row: Record<string, unknown> }> = [];
 
     for (const item of items ?? []) {
       const sheetRowId = rowIdMap.get(String(item.quotation_item_id));
       if (sheetRowId) {
-        toEdit.push({ ID: sheetRowId, ...syncFields(item) });
-        results[item.quotation_item_id] = "updated";
+        toEdit.push({ itemId: item.quotation_item_id, row: { ID: sheetRowId, ...syncFields(item) } });
       } else {
         const quotation = quotationById.get(item.quotation_id);
         const orderDate = quotation?.created_at ? new Date(quotation.created_at).toISOString().slice(0, 10) : "";
         toAdd.push({
-          "Job ID": quotation?.order_number || "",
-          "Quotation_id": String(item.quotation_id ?? ""),
-          "quotation_item_id": String(item.quotation_item_id),
-          "License Plate": quotation?.plate_number || "",
-          "Quantity": item.quantity ?? 0,
-          "Order Date": orderDate,
-          "Branch": branchByCustomer.get(item.customer_id) || "",
-          ...syncFields(item),
+          itemId: item.quotation_item_id,
+          row: {
+            "Job ID": quotation?.order_number || "",
+            "Quotation_id": String(item.quotation_id ?? ""),
+            "quotation_item_id": String(item.quotation_item_id),
+            "License Plate": quotation?.plate_number || "",
+            "Quantity": item.quantity ?? 0,
+            "Order Date": orderDate,
+            "Branch": branchByCustomer.get(item.customer_id) || "",
+            ...syncFields(item),
+          },
         });
-        results[item.quotation_item_id] = "added";
       }
     }
 
-    if (toEdit.length > 0) await appsheetCall({ Action: "Edit", Properties: {}, Rows: toEdit });
-    if (toAdd.length > 0) await appsheetCall({ Action: "Add", Properties: {}, Rows: toAdd });
-
+    const editOutcomes = await submitBatch("Edit", toEdit, "updated");
+    const addOutcomes = await submitBatch("Add", toAdd, "added");
+    const results: Record<number, string> = { ...editOutcomes, ...addOutcomes };
     for (const id of missing) results[id] = "item_not_found";
 
-    console.log(`bulk_update_items_in_sheet: ${toEdit.length} updated, ${toAdd.length} added, ${missing.length} missing from DB`);
+    const updated = Object.values(editOutcomes).filter((v) => v === "updated").length;
+    const added = Object.values(addOutcomes).filter((v) => v === "added").length;
+    const failed = Object.values(results).filter((v) => v.startsWith("failed")).length;
+
+    console.log(`bulk_update_items_in_sheet: ${updated} updated, ${added} added, ${failed} failed, ${missing.length} missing from DB`);
     return new Response(
-      JSON.stringify({ success: true, updated: toEdit.length, added: toAdd.length, missing_from_db: missing.length, results }),
+      JSON.stringify({ success: true, updated, added, failed, missing_from_db: missing.length, results }),
       { status: 200 }
     );
   } catch (err) {
