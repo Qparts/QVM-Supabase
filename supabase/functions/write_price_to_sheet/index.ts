@@ -153,13 +153,18 @@ serve(async (req) => {
     // Two independent batched Edit calls - one Edit covering every matched row's status, one
     // Edit covering every matched row's price - so a validation failure on one column for one
     // row can't block the other column's write for that row (see file header).
+    //
+    // Run strictly sequentially, never concurrently. AppSheet's Edit doesn't guarantee an
+    // isolated per-column patch under concurrent requests to the same row - two overlapping
+    // Edit calls can each read a stale snapshot of the row before the other's write has landed,
+    // then write that stale snapshot back, clobbering the other call's column. Awaiting the
+    // price call to fully complete before starting the status call (rather than Promise.all)
+    // closes that race: the status call's read can never precede the price write.
     const statusRows = matched.map((m) => ({ itemId: m.itemId, row: { ID: m.sheetRowId, "Delivery Status": "Priced" } }));
     const priceRows = matched.map((m) => ({ itemId: m.itemId, row: { ID: m.sheetRowId, "unite price": m.price } }));
 
-    const [statusOutcomes, priceOutcomes] = await Promise.all([
-      submitEditBatch(statusRows),
-      submitEditBatch(priceRows),
-    ]);
+    const priceOutcomes = await submitEditBatch(priceRows);
+    const statusOutcomes = await submitEditBatch(statusRows);
 
     for (const m of matched) {
       const priceOk = priceOutcomes[m.itemId] === true;
