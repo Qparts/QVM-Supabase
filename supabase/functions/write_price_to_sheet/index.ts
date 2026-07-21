@@ -1,20 +1,29 @@
 // supabase/functions/write_price_to_sheet/index.ts
 // Syncs quotation_items.price_before_vat into the "Spare Part" AppSheet table's "unite price"
-// column, for a chunk of quotation_item_ids in one batched Find + one batched Edit call. Mirrors
-// bulk_update_items_in_sheet's batching pattern, but keeps this function's own narrower scope:
-// only price is written, items with no price_before_vat yet are skipped, and items whose sheet
-// row isn't found are skipped (never created) rather than added as new rows.
+// column (and stamps "Delivery Status" as "Priced"), for a chunk of quotation_item_ids in one
+// batched Find call. Mirrors bulk_update_items_in_sheet's batching pattern, but keeps this
+// function's own narrower scope: only price + status are written, items with no
+// price_before_vat yet are skipped, and items whose sheet row isn't found are skipped (never
+// created) rather than added as new rows.
 //
-// This function used to also stamp "Delivery Status" = "Priced" on the same rows. That write is
-// now disabled (see below): qvm_new_apps.trg_update_item_status_in_sheet already fires
-// independently on every item_status change (including the transition to Priced) and writes
-// "Delivery Status" itself via update_item_status_in_sheet. Both triggers fire from the same
-// UPDATE via async net.http_post, so their edge functions could run concurrently against the
-// same AppSheet row - and since AppSheet's Edit doesn't guarantee an isolated per-column patch
-// under concurrent requests, whichever call's read was stale would write back and clobber the
-// other's column. In practice this showed up as prices getting written correctly, then wiped
-// once a status write landed. Leaving status to the one trigger already responsible for it
-// removes this function's side of that race.
+// This function now owns the Delivery Status = "Priced" write for the specific transition to
+// item_status 17. qvm_new_apps.trg_update_item_status_in_sheet (which independently writes
+// "Delivery Status" for every OTHER item_status change) has its trigger WHEN clause excluding
+// item_status = 17 for exactly this reason, so the two never fire for the same UPDATE and can't
+// race each other on the same AppSheet row.
+//
+// Status and price are written as two SEPARATE batched Edit calls (one Edit covering every
+// matched row's "Delivery Status", one Edit covering every matched row's "unite price") rather
+// than one Edit per row setting both columns at once, because AppSheet rejects an entire row's
+// Edit if any single column on that row fails its own validation - combining them meant a status
+// validation failure on a row could silently block that row's price write too.
+//
+// The two calls are run strictly sequentially (price, then status), never concurrently.
+// AppSheet's Edit doesn't guarantee an isolated per-column patch under concurrent requests to
+// the same row - two overlapping Edit calls can each read a stale snapshot of the row before the
+// other's write has landed, then write that stale snapshot back, clobbering the other call's
+// column. Awaiting the price call to fully complete before starting the status call closes that
+// race: the status call's read can never precede the price write.
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -151,21 +160,29 @@ serve(async (req) => {
       matched.push({ itemId: p.id, sheetRowId, price: p.price });
     }
 
-    // Status write disabled - qvm_new_apps.trg_update_item_status_in_sheet already owns
-    // "Delivery Status" for every item_status change and races with this function's own status
-    // write otherwise (see file header). Only "unite price" is written now.
-    // const statusRows = matched.map((m) => ({ itemId: m.itemId, row: { ID: m.sheetRowId, "Delivery Status": "Priced" } }));
+    // Two independent batched Edit calls - one Edit covering every matched row's status, one
+    // Edit covering every matched row's price - run strictly sequentially (see file header).
+    const statusRows = matched.map((m) => ({ itemId: m.itemId, row: { ID: m.sheetRowId, "Delivery Status": "Priced" } }));
     const priceRows = matched.map((m) => ({ itemId: m.itemId, row: { ID: m.sheetRowId, "unite price": m.price } }));
 
     const priceOutcomes = await submitEditBatch(priceRows);
-    // const statusOutcomes = await submitEditBatch(statusRows);
+    const statusOutcomes = await submitEditBatch(statusRows);
 
     for (const m of matched) {
       const priceOk = priceOutcomes[m.itemId] === true;
-      results[m.itemId] = priceOk ? "written" : `failed: price update failed: ${priceOutcomes[m.itemId]}`;
+      const statusOk = statusOutcomes[m.itemId] === true;
+      if (priceOk && statusOk) {
+        results[m.itemId] = "written";
+      } else if (priceOk && !statusOk) {
+        results[m.itemId] = `written (status update failed: ${statusOutcomes[m.itemId]})`;
+      } else if (!priceOk && statusOk) {
+        results[m.itemId] = `failed: price update failed: ${priceOutcomes[m.itemId]}`;
+      } else {
+        results[m.itemId] = `failed: price update failed: ${priceOutcomes[m.itemId]}; status update failed: ${statusOutcomes[m.itemId]}`;
+      }
     }
 
-    const written = Object.values(results).filter((v) => v === "written").length;
+    const written = Object.values(results).filter((v) => v === "written" || v.startsWith("written (")).length;
     const failed = Object.values(results).filter((v) => v.startsWith("failed")).length;
     console.log(`write_price_to_sheet: ${written} written, ${failed} failed, ${ids.length - priced.length} skipped (not found/no price)`);
 
