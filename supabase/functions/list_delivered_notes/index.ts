@@ -61,9 +61,11 @@ serve(async (req) => {
 
     // Parse request
     let search = "";
+    let branchId: number | null = null;
     try {
       const body = await req.json();
       if (body && typeof body.search === "string") search = body.search.trim();
+      if (body && typeof body.branchId === "number") branchId = body.branchId;
     } catch {}
 
     // Helper: basic filter builder
@@ -79,7 +81,7 @@ serve(async (req) => {
 
     // Fetch rows via public RPC (schema-safe)
     const { data: rowsData, error: rowsErr } = await supabase
-      .rpc("get_delivered_note_rows", { p_search: search, p_limit: 500 });
+      .rpc("get_delivered_note_rows", { p_search: search, p_limit: 500, p_branch_id: branchId });
     if (rowsErr) throw rowsErr;
 
     const dnRows = (rowsData && (rowsData as any).dn) ? (rowsData as any).dn as any[] : [];
