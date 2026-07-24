@@ -46,6 +46,12 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
+// get_archive_note_rows applies LIMIT/OFFSET to flat delivery/return-item rows, but this
+// endpoint groups those rows into one note per order_number+event_date before paginating -
+// pulling a generous flat-row window (instead of the requested page_size) keeps a note's items
+// from being split across pages by the RPC's own row-level limit.
+const FLAT_ROW_FETCH_LIMIT = 5000;
+
 function toNumber(val: any): number {
   const n = Number((val ?? "").toString().replace(/[^0-9.\-]/g, ""));
   return Number.isFinite(n) ? n : 0;
@@ -76,10 +82,22 @@ serve(async (req) => {
 
     const supabase = createClient(supabaseUrl, serviceRoleKey);
 
+    const token = authHeader.replace("Bearer ", "");
+    const { data: authData, error: authErr } = await supabase.auth.getUser(token);
+    if (authErr || !authData?.user) {
+      return new Response("Unauthorized", { status: 401, headers: corsHeaders });
+    }
+    const userId = authData.user.id;
+
     // Input
     let search = "";
     let type: "all" | "dn" | "rn" = "all";
-    let days = 30;
+    let companyId: number | null = null;
+    let branchId: number | null = null;
+    let dateFrom: string | null = null;
+    let dateTo: string | null = null;
+    let page = 1;
+    let pageSize = 50;
     try {
       const body = await req.json();
       if (body && typeof body.search === "string") search = body.search.trim();
@@ -87,44 +105,33 @@ serve(async (req) => {
         const t = body.type.toLowerCase();
         if (t === "dn" || t === "rn" || t === "all") type = t;
       }
-      if (body && typeof body.days === "number" && body.days > 0 && body.days <= 3650) days = body.days;
-    } catch {}
+      if (body && typeof body.company_id === "number") companyId = body.company_id;
+      if (body && typeof body.branch_id === "number") branchId = body.branch_id;
+      if (body && typeof body.date_from === "string") dateFrom = body.date_from;
+      if (body && typeof body.date_to === "string") dateTo = body.date_to;
+      if (body && typeof body.page === "number" && body.page > 0) page = body.page;
+      if (body && typeof body.page_size === "number" && body.page_size > 0) pageSize = body.page_size;
+    } catch { /* empty body — use defaults */ }
 
-    // Fetch rows via public RPC to satisfy PostgREST schema restrictions
     const { data: rowsJson, error: rowsErr } = await supabase.rpc('get_archive_note_rows', {
+      p_user_id: userId,
       p_search: search,
       p_type: type,
-      p_days: days,
+      p_company_id: companyId,
+      p_branch_id: branchId,
+      p_date_from: dateFrom,
+      p_date_to: dateTo,
+      p_limit: FLAT_ROW_FETCH_LIMIT,
+      p_offset: 0,
     });
     if (rowsErr) throw rowsErr;
     const dnRows = (rowsJson as any)?.dn ?? [];
     const rnRows = (rowsJson as any)?.rn ?? [];
 
-    // Filters
-    const since = new Date();
-    since.setDate(since.getDate() - days);
-
-    const applyCommonFilters = (rows: any[], kind: NoteType) => {
-      const withDoc = rows.filter((r) =>
-        kind === "DN" ? (r.invoice_number && String(r.invoice_number).length > 0) : (r.creditnote_number && String(r.creditnote_number).length > 0)
-      );
-      const afterDate = withDoc.filter((r) => {
-        const d = new Date(parseEventDate(r, kind));
-        return isFinite(d.getTime()) ? d >= since : true;
-      });
-      const q = search.toLowerCase();
-      const byText = q
-        ? afterDate.filter((r) =>
-            String(r.order_number || "").toLowerCase().includes(q) ||
-            String(r.plate_number || "").toLowerCase().includes(q) ||
-            String(r.vin || "").toLowerCase().includes(q)
-          )
-        : afterDate;
-      return byText;
-    };
-
-    const dnFiltered = type === "rn" ? [] : applyCommonFilters(dnRows ?? [], "DN");
-    const rnFiltered = type === "dn" ? [] : applyCommonFilters(rnRows ?? [], "RN");
+    // Archive only shows notes with an issued invoice/credit note - other statuses
+    // (pending invoice, return request, etc.) belong to the Delivered Orders page.
+    const dnFiltered = (dnRows ?? []).filter((r: any) => r.invoice_number && String(r.invoice_number).length > 0);
+    const rnFiltered = (rnRows ?? []).filter((r: any) => r.creditnote_number && String(r.creditnote_number).length > 0);
 
     // Grouping by order_number + event date
     const groupByKey = (rows: any[], kind: NoteType) => {
@@ -179,13 +186,13 @@ serve(async (req) => {
         vin: String(first.vin ?? ""),
         brand: String(first.main_brand ?? ""),
         model: String(first.model ?? ""),
-        client: String(first.client_name ?? ""),
-        branch: String(first.branch ?? ""),
+        client: String(first.company_name ?? ""),
+        branch: String(first.branch_name ?? ""),
         totalBeforeVat,
         vatAmount,
         totalWithVat,
         shippingFees: 0,
-        signedBy: rows.find((r: any) => r.receipt_signature_email)?.receipt_signature_email ?? null,
+        signedBy: rows.find((r: any) => r.delivery_signature_email)?.delivery_signature_email ?? null,
         signedAt: null,
         invoiceNumber,
         items,
@@ -228,23 +235,27 @@ serve(async (req) => {
         vin: String(first.vin ?? ""),
         brand: String(first.main_brand ?? ""),
         model: String(first.model ?? ""),
-        client: String(first.client_name ?? ""),
-        branch: String(first.branch ?? ""),
+        client: String(first.company_name ?? ""),
+        branch: String(first.branch_name ?? ""),
         totalBeforeVat,
         vatAmount,
         totalWithVat,
         shippingFees: 0,
-        signedBy: rows.find((r: any) => r.receipt_signature_email)?.receipt_signature_email ?? null,
+        signedBy: rows.find((r: any) => r.return_signature_email)?.return_signature_email ?? null,
         signedAt: null,
         invoiceNumber: creditnoteNumber,
         items,
       });
     }
 
-    // Sort by eventDate desc
+    // Sort by eventDate desc, then paginate at the note (not raw item-row) level
     notes.sort((a, b) => new Date(b.eventDate).getTime() - new Date(a.eventDate).getTime());
 
-    return new Response(JSON.stringify({ status: true, message: "ok", data: notes }), {
+    const total = notes.length;
+    const start = (page - 1) * pageSize;
+    const pagedNotes = notes.slice(start, start + pageSize);
+
+    return new Response(JSON.stringify({ status: true, message: "ok", data: pagedNotes, total, page, page_size: pageSize }), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
