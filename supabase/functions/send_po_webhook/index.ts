@@ -7,8 +7,9 @@
 // qvm_new_apps.webhook_logs via the service-role client — a separate connection, so the log survives
 // even when the main transaction rolls back.
 //
-// Payload construction (vendor emails/phones/notification channels, item list) stays client-side
-// in PricingPage.tsx exactly as before; this function receives the already-built webhook_payload
+// Payload construction (vendor emails/phones/notification channels, item list, and
+// unique_vendor_url built from the vendor's existing quotation_vendors.access_token) stays
+// client-side in PricingPage.tsx; this function receives the already-built webhook_payload
 // rather than reconstructing it, keeping this change scoped to reliability/observability of the
 // webhook call itself. Mirrors send_rfq_webhook/index.ts.
 import { Pool } from "https://deno.land/x/postgres@v0.17.0/mod.ts";
