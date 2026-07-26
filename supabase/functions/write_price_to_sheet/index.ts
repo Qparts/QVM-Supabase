@@ -24,6 +24,11 @@
 // other's write has landed, then write that stale snapshot back, clobbering the other call's
 // column. Awaiting the price call to fully complete before starting the status call closes that
 // race: the status call's read can never precede the price write.
+//
+// QNEW-65: every item in a batch gets its own appsheet_sync_logs rows (one for the price Edit,
+// one for the status Edit) - a 'pending' row inserted before submitEditBatch runs, updated with
+// that item's own outcome from priceOutcomes/statusOutcomes afterward. Logging per item (not per
+// batch call) is what makes "retry logic can query status='error' rows" actually work per record.
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -34,6 +39,48 @@ const TABLE_NAME = Deno.env.get("APPSHEET_TABLE_NAME") ?? "Spare Part";
 const APPSHEET_BASE = `https://api.appsheet.com/api/v2/apps/${APP_ID}/tables/${encodeURIComponent(TABLE_NAME)}/Action`;
 
 const MAX_IDS_PER_REQUEST = 300;
+
+const logsClient = createClient(
+  Deno.env.get("SUPABASE_URL")!,
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+).schema("qvm_new_apps");
+
+async function logSyncStart(action: string, sourceTable: string, recordId: number, payload: unknown, createdBy: string | null) {
+  const { data } = await logsClient.from("appsheet_sync_logs")
+    .insert({ action, source_table: sourceTable, record_id: recordId, payload_sent: payload, created_by: createdBy })
+    .select("id")
+    .single();
+  return data?.id as number | undefined;
+}
+
+async function logSyncFinish(id: number | undefined, status: "success" | "error", response: unknown, httpStatus: number | null, errorMessage?: string) {
+  if (!id) return;
+  await logsClient.from("appsheet_sync_logs")
+    .update({ status, appsheet_response: response, http_status: httpStatus, error_message: errorMessage ?? null, responded_at: new Date().toISOString() })
+    .eq("id", id);
+}
+
+// Inserts one pending log row per row in the batch; returns a map of itemId -> log id.
+async function logBatchStart(action: string, rows: Array<{ itemId: number; row: Record<string, unknown> }>, createdBy: string | null) {
+  const ids = new Map<number, number | undefined>();
+  for (const r of rows) {
+    ids.set(r.itemId, await logSyncStart(action, "quotation_items", r.itemId, r.row, createdBy));
+  }
+  return ids;
+}
+
+// Finishes every row's log from its individual outcome (true = success, string = error message).
+async function logBatchFinish(logIds: Map<number, number | undefined>, outcomes: Record<number, true | string>) {
+  for (const [itemId, logId] of logIds) {
+    const outcome = outcomes[itemId];
+    if (outcome === true) {
+      await logSyncFinish(logId, "success", null, 200);
+    } else {
+      const match = /failed: (\d+)/.exec(String(outcome ?? ""));
+      await logSyncFinish(logId, "error", null, match ? Number(match[1]) : null, outcome ?? "unknown error");
+    }
+  }
+}
 
 async function appsheetCall(body: Record<string, unknown>) {
   const res = await fetch(APPSHEET_BASE, {
@@ -105,7 +152,7 @@ async function submitEditBatch(
 
 serve(async (req) => {
   try {
-    const { quotation_item_ids } = await req.json();
+    const { quotation_item_ids, created_by } = await req.json();
     if (!Array.isArray(quotation_item_ids) || quotation_item_ids.length === 0) {
       return new Response(JSON.stringify({ error: "quotation_item_ids required" }), { status: 400 });
     }
@@ -165,8 +212,14 @@ serve(async (req) => {
     const statusRows = matched.map((m) => ({ itemId: m.itemId, row: { ID: m.sheetRowId, "Delivery Status": "Priced" } }));
     const priceRows = matched.map((m) => ({ itemId: m.itemId, row: { ID: m.sheetRowId, "unite price": m.price } }));
 
+    const createdBy: string | null = created_by ?? null;
+    const priceLogIds = await logBatchStart("update_price", priceRows, createdBy);
     const priceOutcomes = await submitEditBatch(priceRows);
+    await logBatchFinish(priceLogIds, priceOutcomes);
+
+    const statusLogIds = await logBatchStart("update_status", statusRows, createdBy);
     const statusOutcomes = await submitEditBatch(statusRows);
+    await logBatchFinish(statusLogIds, statusOutcomes);
 
     for (const m of matched) {
       const priceOk = priceOutcomes[m.itemId] === true;
