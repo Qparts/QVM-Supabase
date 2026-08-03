@@ -76,6 +76,7 @@ serve(async (req) => {
       order_number,
       items,
       notes,
+      insurance_company_id,
     } = body;
 
     // Get region_id for branch using RPC
@@ -177,6 +178,7 @@ serve(async (req) => {
         p_order_type: order_type,
         p_plate_number: plate_number,
         p_service_advisor: service_advisor,
+        p_insurance_company_id: insurance_company_id ?? null,
       })
       .single();
 

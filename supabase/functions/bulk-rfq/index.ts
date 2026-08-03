@@ -4,7 +4,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 serve(async (req)=>{
   const supabase = createClient(Deno.env.get('SUPABASE_URL'), Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')).schema('qvm_new_apps');
   const reqBody = await req.json();
-  const { p_client_id, p_service_advisor, p_order_type, p_parts } = reqBody;
+  const { p_client_id, p_service_advisor, p_order_type, p_parts, p_insurance_company_id } = reqBody;
   // Get status_id for 'Placed Order'
   const status_id = 15;
   // 🕐 Get current time in KSA
@@ -54,7 +54,8 @@ serve(async (req)=>{
       order_number,
       service_advisor: p_service_advisor,
       order_type: p_order_type,
-      account_manager: shiftManagerId
+      account_manager: shiftManagerId,
+      insurance_company_id: p_insurance_company_id ?? null
     }
   ]).select('quotation_id').single();
   if (orderErr || !orderData) {
