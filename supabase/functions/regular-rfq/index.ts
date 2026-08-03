@@ -4,7 +4,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 serve(async (req)=>{
   const supabase = createClient(Deno.env.get('SUPABASE_URL'), Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')).schema('qvm_new_apps');
   const reqBody = await req.json();
-  const { p_client_id, p_branch, p_plate_number, p_vin, p_main_brand, p_model, p_all_items_required, p_delivery_type, p_service_advisor, p_order_type, p_parts } = reqBody;
+  const { p_client_id, p_branch, p_plate_number, p_vin, p_main_brand, p_model, p_all_items_required, p_delivery_type, p_service_advisor, p_order_type, p_parts, p_insurance_company_id } = reqBody;
   // Get region_id for branch
   const { data: regionData, error: regionErr } = await supabase.from('client_branches').select('region_id').eq('customer_id', p_branch).single();
   if (regionErr || !regionData) {
@@ -74,7 +74,8 @@ serve(async (req)=>{
       delivery_type: p_delivery_type,
       service_advisor: p_service_advisor,
       order_type: p_order_type,
-      account_manager: shiftManagerId
+      account_manager: shiftManagerId,
+      insurance_company_id: p_insurance_company_id ?? null
     }
   ]).select('quotation_id').single();
   if (orderErr || !orderData) {
