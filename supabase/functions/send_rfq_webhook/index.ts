@@ -29,7 +29,7 @@ const WEBHOOK_TIMEOUT_MS = 15000;
 interface VendorListEntryBase {
   vendor_id: number;
   vendor_branch_id: number | null;
-  email: string;
+  email: string[];
   vendor_name: string;
   phone: string[];
   notification_method: string[];
