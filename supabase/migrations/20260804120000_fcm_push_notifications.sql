@@ -148,7 +148,7 @@ BEGIN
   WHERE ud.user_company = v_company_id;
 
   PERFORM net.http_post(
-    url := 'https://exizrhlkxoqljiypzwyx.supabase.co/functions/v1/send-push-notification',
+    url := 'https://vvkulhfjtznozgxiqluj.supabase.co/functions/v1/send-push-notification',
     headers := jsonb_build_object('Content-Type', 'application/json'),
     body := jsonb_build_object('notification_id', v_notification_id)
   );
@@ -200,7 +200,7 @@ BEGIN
   VALUES (v_notification_id, p_user_id);
 
   PERFORM net.http_post(
-    url := 'https://exizrhlkxoqljiypzwyx.supabase.co/functions/v1/send-push-notification',
+    url := 'https://vvkulhfjtznozgxiqluj.supabase.co/functions/v1/send-push-notification',
     headers := jsonb_build_object('Content-Type', 'application/json'),
     body := jsonb_build_object('notification_id', v_notification_id)
   );
