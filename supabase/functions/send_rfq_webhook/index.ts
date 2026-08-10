@@ -23,8 +23,27 @@ const corsHeaders = {
 };
 
 const DB_URL = Deno.env.get("SUPABASE_DB_URL")!;
-const WEBHOOK_URL = Deno.env.get("RFQ_PO_WEBHOOK_URL")!;
 const WEBHOOK_TIMEOUT_MS = 15000;
+
+// The webhook target is admin-configurable PER CLIENT COMPANY from the Notification Settings page
+// (qvm_new_apps.notification_settings.webhook_base_url, keyed by company_id — the same
+// list_data_id space under list_id=1 used by client_branches/get_clients_rows, QNEW-99). Resolved
+// fresh on every request (not cached) via the quotation's own client company, using the same
+// open transaction connection. Falls back to the RFQ_PO_WEBHOOK_URL secret when that company
+// hasn't saved a webhook URL yet (or its company can't be resolved), so existing behavior is
+// preserved until an admin configures one.
+async function resolveWebhookUrl(conn: any, quotationId: number): Promise<string> {
+  const r = await conn.queryObject<{ webhook_base_url: string | null }>(
+    `SELECT ns.webhook_base_url
+     FROM qvm_new_apps.quotation_items qi
+     JOIN qvm_new_apps.client_branches cb ON cb.customer_id = qi.customer_id
+     LEFT JOIN qvm_new_apps.notification_settings ns ON ns.company_id = cb.list_data_id
+     WHERE qi.quotation_id = $1
+     LIMIT 1`,
+    [quotationId]
+  );
+  return r.rows[0]?.webhook_base_url || Deno.env.get("RFQ_PO_WEBHOOK_URL")!;
+}
 
 interface VendorListEntryBase {
   vendor_id: number;
@@ -53,6 +72,7 @@ interface CreatedRow {
 
 async function logAttempt(params: {
   referenceId: number;
+  webhookUrl: string;
   status: "success" | "failed";
   responseStatus: number | null;
   responseBody: string;
@@ -62,7 +82,7 @@ async function logAttempt(params: {
   const { error } = await supabase.schema("qvm_new_apps").from("webhook_logs").insert({
     trigger_type: "send_rfq",
     reference_id: params.referenceId,
-    request_url: WEBHOOK_URL,
+    request_url: params.webhookUrl,
     request_payload: params.payload,
     response_status: params.responseStatus,
     response_body: params.responseBody,
@@ -155,11 +175,13 @@ Deno.serve(async (req) => {
         }),
       };
 
+      const webhookUrl = await resolveWebhookUrl(conn, quotation_id);
+
       let webhookStatus: number | null = null;
       let webhookBodyText = "";
       let webhookOk = false;
       try {
-        const res = await fetch(WEBHOOK_URL, {
+        const res = await fetch(webhookUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(finalPayload),
@@ -174,6 +196,7 @@ Deno.serve(async (req) => {
 
       await logAttempt({
         referenceId: quotation_id,
+        webhookUrl,
         status: webhookOk ? "success" : "failed",
         responseStatus: webhookStatus,
         responseBody: webhookBodyText,
