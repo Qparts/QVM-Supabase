@@ -127,23 +127,6 @@ serve(async (req) => {
       });
     }
 
-    // Use provided order number if present, otherwise generate one
-    let finalOrderNumber: string | null =
-      typeof order_number === 'string' && order_number.trim() !== ''
-        ? order_number.trim()
-        : null;
-
-    if (!finalOrderNumber) {
-      const { data: generatedOrderNumber, error: orderErr } = await supabase
-        .rpc("generate_rfq_order_number", {
-          p_client_id: client_id,
-          p_region_id: region_id,
-        });
-
-      if (orderErr) throw orderErr;
-      finalOrderNumber = generatedOrderNumber as string;
-    }
-
     // Get account manager
     const { data: amResult, error: amErr } = await supabase.functions.invoke(
       "get_account_manager",
@@ -169,84 +152,64 @@ serve(async (req) => {
 
     const account_manager = amResult.data.account_manager;
 
-    // Create quotation
-    const { data: quotation, error: qErr } = await supabase
-      .rpc('create_quotation', {
+    // Quotation + items + note are created atomically in a single DB transaction (order-number
+    // resolution/uniqueness included) — see qvm_new_apps.create_quotation_with_items. This
+    // replaces what used to be three separate, independently-committing RPC calls, which could
+    // (and did) leave an orphaned quotation row with zero items if anything failed partway
+    // through, and had no protection at all against two callers using the same order_number.
+    const { data: result, error: createErr } = await supabase
+      .schema('qvm_new_apps')
+      .rpc('create_quotation_with_items', {
         p_account_manager: account_manager,
         p_delivery_type: delivery_type,
-        p_order_number: finalOrderNumber,
         p_order_type: order_type,
         p_plate_number: plate_number,
         p_service_advisor: service_advisor,
+        p_client_id: client_id,
+        p_region_id: region_id,
+        p_customer_id: customer_id,
+        p_items: items,
         p_insurance_company_id: insurance_company_id ?? null,
-      })
-      .single();
-
-    if (qErr) throw qErr;
-
-    // Type assertion for quotation
-    const typedQuotation = quotation as {
-      quotation_id: number;
-      order_number: string;
-    };
-
-    // Determine initial status based on part number presence
-    const getItemStatus = (partNumber?: string | null) => {
-      return partNumber && partNumber.trim() !== '' ? 235 : 236;
-    };
-
-    // Prepare items with estimated prices
-    const itemsPayload = await Promise.all(
-      items.map(async (item: any) => {
-        const { data: estPriceData, error: estErr } = await supabase
-          .rpc("get_estimated_price", {
-            p_brand_class_id: item.brand_class,
-            p_client_id: client_id,
-            p_part_number: item.part_number,
-          });
-        
-        if (estErr) throw estErr;
-        console.log("estimated price error: ", estErr, "estimated price value: ", estPriceData);
-
-        return {
-          quotation_id: typedQuotation.quotation_id,
-          customer_id,
-          vin: item.vin ?? null,
-          main_brand: item.main_brand,
-          model: item.model ?? null,
-          part_number: item.part_number ?? null,
-          part_description: item.part_description ?? null,
-          quantity: item.quantity,
-          brand_class: item.brand_class,
-          part_photo: item.part_photo ?? null,
-          item_status: getItemStatus(item.part_number),
-          item_PK: item.item_PK ?? null,
-          estimated_price: estPriceData,
-        };
-      })
-    );
-
-    // Create quotation items
-    const { data: insertedItems, error: itemsErr } = await supabase
-      .rpc('create_quotation_items', {
-        p_items: itemsPayload
+        p_order_number: typeof order_number === 'string' ? order_number.trim() || null : null,
+        p_notes: notes ?? null,
       });
 
-    if (itemsErr) throw itemsErr;
-
-    // Add note if exists
-    if (notes) {
-      await supabase
-        .rpc('create_quotation_note', {
-          p_type_id: typedQuotation.quotation_id,
-          p_note: notes,
-          p_user_id: service_advisor
+    if (createErr) {
+      // Postgres unique_violation on quotations.order_number — a caller (typically a third-party
+      // integration supplying its own order_number) reused one that already exists. Surface this
+      // distinctly so the caller can tell "duplicate order number" apart from a generic failure,
+      // instead of a flat 500.
+      if (createErr.code === '23505') {
+        return new Response(JSON.stringify({
+          status: false,
+          message: 'Order number already exists',
+          data: null
+        }), {
+          status: 409,
+          headers: {
+            "Content-Type": "application/json",
+            ...corsHeaders
+          }
         });
+      }
+      throw createErr;
     }
 
-    // Build items list from inserted rows to include quotation_item_id
-    const itemsResponse = Array.isArray(insertedItems)
-      ? insertedItems.map((row: any) => ({
+    const typedResult = result as {
+      quotation_id: number;
+      order_number: string;
+      items: Array<{
+        quotation_item_id: number;
+        part_number: string | null;
+        part_description: string | null;
+        estimated_price: number | null;
+        item_pk: string | null;
+        part_photo: string | null;
+      }>;
+    };
+
+    const itemsResponse = Array.isArray(typedResult.items)
+      ? typedResult.items.map((row) => ({
           quotation_item_id: row.quotation_item_id,
           part_number: row.part_number,
           part_description: row.part_description,
@@ -261,8 +224,8 @@ serve(async (req) => {
       status: true,
       message: "RFQ created successfully",
       data: {
-        quotation_id: typedQuotation.quotation_id,
-        order_number: typedQuotation.order_number,
+        quotation_id: typedResult.quotation_id,
+        order_number: typedResult.order_number,
         account_manager,
         items: itemsResponse,
       },
