@@ -7,12 +7,11 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-type UpdateVendorUserBody = {
+type UpdateInternalUserBody = {
   user_id: string;
   user_name?: string;
   email?: string;
   password?: string;
-  role?: "vendor_admin" | "vendor";
   branch_ids?: number[];
 };
 
@@ -38,7 +37,7 @@ serve(async (req) => {
     const { data: callerAuth, error: callerError } = await supabaseAdmin.auth.getUser(jwt);
     if (callerError || !callerAuth.user) return new Response("User not found", { status: 404, headers: corsHeaders });
 
-    const body = (await req.json()) as UpdateVendorUserBody;
+    const body = (await req.json()) as UpdateInternalUserBody;
     const targetUserId = String(body.user_id || "");
     if (!targetUserId) return jsonResponse({ status: "fail", message: "user_id is required" }, 400);
 
@@ -46,54 +45,43 @@ serve(async (req) => {
 
     const { data: target, error: targetError } = await db
       .from("user_data")
-      .select("user_id, user_vendor, user_role, email, user_name")
+      .select("user_id, user_type, user_role, user_company, email")
       .eq("user_id", targetUserId)
       .maybeSingle();
     if (targetError) return jsonResponse({ status: "fail", message: targetError.message }, 500);
-    if (!target?.user_vendor) return jsonResponse({ status: "fail", message: "Vendor user not found" }, 404);
+    if (!target || target.user_type !== 185) return jsonResponse({ status: "fail", message: "Internal user not found" }, 404);
 
     const { data: callerData, error: callerDataError } = await db
       .from("user_data")
-      .select("user_type, user_vendor, user_role")
+      .select("user_type, user_company")
       .eq("user_id", callerAuth.user.id)
       .maybeSingle();
     if (callerDataError) return jsonResponse({ status: "fail", message: callerDataError.message }, 500);
 
+    const isInternal = callerData?.user_type === 185;
+    const sameCompany = callerData?.user_company != null && callerData.user_company === target.user_company;
+    if (!isInternal || !sameCompany) return jsonResponse({ status: "fail", message: "Not authorized" }, 403);
+
+    // Qparts Admin accounts cannot be edited from this page either.
     const { data: roleRows } = await db
       .from("list_data")
-      .select("list_data_id, list_data, list_id, lists!inner(list_name)")
+      .select("list_data_id, list_data, lists!inner(list_name)")
       .eq("lists.list_name", "user_role")
-      .in("list_data", ["Vendor Admin", "Vendor"]);
-    const vendorAdminRoleId = (roleRows ?? []).find((r: any) => r.list_data === "Vendor Admin")?.list_data_id;
-    const vendorRoleId = (roleRows ?? []).find((r: any) => r.list_data === "Vendor")?.list_data_id;
-    if (!vendorAdminRoleId || !vendorRoleId) return jsonResponse({ status: "fail", message: "Vendor role lookup failed" }, 500);
-
-    const isInternal = String(callerData?.user_type ?? "") === "185";
-    const isAdminVendorForThisVendor = callerData?.user_vendor === target.user_vendor && callerData?.user_role === vendorAdminRoleId;
-    if (!isInternal && !isAdminVendorForThisVendor) return jsonResponse({ status: "fail", message: "Not authorized" }, 403);
-
-    const newRoleId = body.role === "vendor_admin" ? vendorAdminRoleId : body.role === "vendor" ? vendorRoleId : undefined;
-
-    // Guard: never leave a vendor account with zero admins.
-    if (newRoleId !== undefined && target.user_role === vendorAdminRoleId && newRoleId !== vendorAdminRoleId) {
-      const { count } = await db
-        .from("user_data")
-        .select("user_id", { count: "exact", head: true })
-        .eq("user_vendor", target.user_vendor)
-        .eq("user_role", vendorAdminRoleId)
-        .neq("user_id", targetUserId);
-      if (!count) return jsonResponse({ status: "fail", message: "Cannot demote the only admin-vendor — promote another user first" }, 400);
+      .eq("list_data", "Qparts Admin");
+    const qpartsAdminRoleId = (roleRows ?? []).find((r: any) => r.list_data === "Qparts Admin")?.list_data_id;
+    if (qpartsAdminRoleId && target.user_role === qpartsAdminRoleId) {
+      return jsonResponse({ status: "fail", message: "Qparts Admin accounts cannot be updated from this page" }, 400);
     }
 
     if (body.branch_ids && body.branch_ids.length > 0) {
       const { data: branchRows, error: branchError } = await db
-        .from("vendor_branches")
-        .select("vendor_branch_id")
-        .eq("vendor_id", target.user_vendor)
-        .in("vendor_branch_id", body.branch_ids);
+        .from("client_branches")
+        .select("customer_id")
+        .eq("list_data_id", target.user_company)
+        .in("customer_id", body.branch_ids);
       if (branchError) return jsonResponse({ status: "fail", message: branchError.message }, 500);
       if ((branchRows ?? []).length !== body.branch_ids.length) {
-        return jsonResponse({ status: "fail", message: "One or more branches do not belong to this vendor" }, 400);
+        return jsonResponse({ status: "fail", message: "One or more branches do not belong to this company" }, 400);
       }
     }
 
@@ -113,18 +101,16 @@ serve(async (req) => {
     const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
     if (body.user_name?.trim()) updates.user_name = body.user_name.trim();
     if (newEmail) updates.email = newEmail;
-    if (newRoleId !== undefined) updates.user_role = newRoleId;
 
     const { error: updateError } = await db.from("user_data").update(updates).eq("user_id", targetUserId);
     if (updateError) return jsonResponse({ status: "fail", message: updateError.message }, 500);
 
-    if (newRoleId === vendorAdminRoleId) {
-      // Admin-vendor gets implicit access to every branch — no explicit rows needed.
-      await db.from("vendor_branch_users").delete().eq("user_id", targetUserId);
-    } else if (body.branch_ids) {
-      await db.from("vendor_branch_users").delete().eq("user_id", targetUserId);
+    if (body.branch_ids) {
+      await db.from("internal_user_branches").delete().eq("user_id", targetUserId);
       if (body.branch_ids.length > 0) {
-        await db.from("vendor_branch_users").insert(body.branch_ids.map((vendor_branch_id) => ({ user_id: targetUserId, vendor_branch_id })));
+        await db.from("internal_user_branches").insert(
+          body.branch_ids.map((branch_id) => ({ user_id: targetUserId, branch_id, created_by: callerAuth.user.id }))
+        );
       }
     }
 

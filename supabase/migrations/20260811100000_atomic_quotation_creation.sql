@@ -98,8 +98,18 @@ BEGIN
   SELECT jsonb_agg(to_jsonb(t)) INTO v_inserted_items
   FROM public.create_quotation_items(v_items_payload) t;
 
+  -- Inserted directly rather than via public.create_quotation_note: that function now requires
+  -- auth.uid() (20260812100000_notes_rpc_authorization.sql, closing a real hole where it used to
+  -- trust a caller-supplied p_user_id with no check at all). But this whole function is called by
+  -- the create_quotation_with_items EDGE FUNCTION using the service-role client, not the end
+  -- user's own session — auth.uid() is NULL in that context even though the edge function already
+  -- independently verified the real user via auth.getUser(jwt) and passed that identity along as
+  -- p_service_advisor. This is already a trusted, pre-authenticated context (reachable only
+  -- through that edge function), so it's safe to write the note directly with p_service_advisor
+  -- rather than route through the externally-facing, auth.uid()-checked wrapper.
   IF p_notes IS NOT NULL AND btrim(p_notes) <> '' THEN
-    PERFORM public.create_quotation_note(v_quotation.quotation_id, p_notes, p_service_advisor);
+    INSERT INTO qvm_new_apps.notes (type_id, note_type, note_description, user_id, created_at)
+    VALUES (v_quotation.quotation_id, 'quotations', p_notes, p_service_advisor, now());
   END IF;
 
   RETURN jsonb_build_object(
