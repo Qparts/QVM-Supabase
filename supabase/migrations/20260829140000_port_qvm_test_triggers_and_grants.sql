@@ -1,0 +1,118 @@
+-- Triggers + EXECUTE grants for the functions ported in 20260829130000, extracted from
+-- QVM/test. Table-level grants for the new tables are already included in
+-- 20260829120000_port_qvm_test_tables.sql.
+
+DROP TRIGGER IF EXISTS wa_device_signal ON qvm_new_apps.wa_device_state;
+DROP TRIGGER IF EXISTS wa_messages_signal ON qvm_new_apps.wa_messages;
+DROP TRIGGER IF EXISTS wa_outbox_notify_ins ON qvm_new_apps.wa_outbox;
+DROP TRIGGER IF EXISTS wa_outbox_notify_upd ON qvm_new_apps.wa_outbox;
+DROP TRIGGER IF EXISTS wa_threads_signal ON qvm_new_apps.wa_threads;
+
+-- trigger wa_device_signal on wa_device_state
+CREATE TRIGGER wa_device_signal AFTER UPDATE ON qvm_new_apps.wa_device_state FOR EACH ROW WHEN (((old.state IS DISTINCT FROM new.state) OR (old.jid IS DISTINCT FROM new.jid) OR (old.qr_png IS DISTINCT FROM new.qr_png) OR (old.pair_requested_at IS DISTINCT FROM new.pair_requested_at) OR (old.last_error IS DISTINCT FROM new.last_error))) EXECUTE FUNCTION qvm_new_apps.wa_device_signal();
+-- trigger wa_messages_signal on wa_messages
+CREATE TRIGGER wa_messages_signal AFTER INSERT OR UPDATE ON qvm_new_apps.wa_messages FOR EACH ROW EXECUTE FUNCTION qvm_new_apps.wa_messages_signal();
+-- trigger wa_outbox_notify_ins on wa_outbox
+CREATE TRIGGER wa_outbox_notify_ins AFTER INSERT ON qvm_new_apps.wa_outbox FOR EACH ROW EXECUTE FUNCTION qvm_new_apps.wa_outbox_notify();
+-- trigger wa_outbox_notify_upd on wa_outbox
+CREATE TRIGGER wa_outbox_notify_upd AFTER UPDATE OF status ON qvm_new_apps.wa_outbox FOR EACH ROW WHEN (((new.status = 'queued'::text) AND (old.status IS DISTINCT FROM 'queued'::text))) EXECUTE FUNCTION qvm_new_apps.wa_outbox_notify();
+-- trigger wa_threads_signal on wa_threads
+CREATE TRIGGER wa_threads_signal AFTER INSERT OR UPDATE ON qvm_new_apps.wa_threads FOR EACH ROW EXECUTE FUNCTION qvm_new_apps.wa_threads_signal();
+GRANT EXECUTE ON FUNCTION public.add_note(p_note_type text, p_type_id integer, p_is_internal boolean, p_note_description text, p_note_attachment text) TO anon;
+GRANT EXECUTE ON FUNCTION public.add_note(p_note_type text, p_type_id integer, p_is_internal boolean, p_note_description text, p_note_attachment text) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.add_note(p_note_type text, p_type_id integer, p_is_internal boolean, p_note_description text, p_note_attachment text) TO service_role;
+GRANT EXECUTE ON FUNCTION public.get_vendor_quotation_extras_by_token(p_token uuid) TO anon;
+GRANT EXECUTE ON FUNCTION public.get_vendor_quotation_extras_by_token(p_token uuid) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.get_vendor_quotation_extras_by_token(p_token uuid) TO service_role;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.add_extract_alt_pn(p_quotation_item_id integer, p_alt text) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.add_extract_item(p_quotation_id integer, p_part_description text, p_part_number text, p_alt_part_number text) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.branch_order_addresses(p_branch_id bigint) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.create_quotation_with_items(p_account_manager uuid, p_delivery_type integer, p_order_type integer, p_plate_number text, p_service_advisor uuid, p_client_id integer, p_region_id integer, p_customer_id bigint, p_items jsonb, p_insurance_company_id bigint, p_order_number text, p_notes text, p_request_kind text, p_customer_address_id bigint) TO service_role;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.current_upload_vendor_id() TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.customer_address_save(p_customer_id bigint, p_address_id bigint, p_client_branch_id bigint, p_label text, p_address_line text, p_city text, p_region_id integer, p_contact_name text, p_contact_phone text, p_receives_orders boolean, p_receives_shipments boolean, p_is_default boolean) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.customer_address_set_active(p_address_id bigint, p_active boolean) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.customer_create(p_name_en text, p_name_ar text, p_customer_type text, p_cr_number text, p_vat_number text, p_contact_person text, p_phone text, p_email text, p_region_id integer, p_customer_code text, p_branch_name text, p_branch_city text, p_order_category integer, p_account_manager uuid, p_order_prefix text, p_address_line text, p_address_label text, p_contact_phone text, p_source text) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.customer_document_save(p_customer_id bigint, p_file_path text, p_doc_type text, p_doc_number text, p_issued_on date, p_expires_on date) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.customer_get(p_customer_id bigint) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.customer_merge_into(p_customer_id bigint, p_name_ar text, p_name_en text, p_customer_type text, p_cr_number text, p_vat_number text, p_contact_person text, p_phone text, p_email text, p_region_id integer, p_customer_code text, p_branch_name text, p_branch_city text, p_order_category integer, p_account_manager uuid, p_order_prefix text, p_address_line text, p_address_label text, p_contact_phone text) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.customer_update(p_customer_id bigint, p_patch jsonb) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.customers_list(p_search text, p_source text, p_region_id integer, p_status text, p_account_manager uuid, p_limit integer, p_offset integer) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.email_connect_account(p_email text, p_app_password text, p_display_name text) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.email_disconnect_account(p_account_id bigint) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.email_list_accounts() TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.get_extract_pn_order(p_quotation_id integer) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.get_extract_pn_queue() TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.get_orders_pricing_progress(p_quotation_ids integer[]) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.get_vendor_quotation_extras_by_token(p_token uuid) TO anon;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.get_vendor_quotation_extras_by_token(p_token uuid) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.is_qparts_team() TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.lock_extract_order(p_quotation_id integer, p_action text) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.may_touch_upload_batch(p_batch_id bigint) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.normalize_part_number(p_value text) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.normalize_part_number(p_value text) TO service_role;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.part_name_dictionary_refresh() TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.pricing_layer2_save(p_patch jsonb) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.pricing_policies_get() TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.pricing_policy_delete(p_policy_id bigint) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.pricing_policy_save(p_policy_id bigint, p_patch jsonb) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.pricing_simulate(p_input jsonb) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.quick_send_item_to_vendors(p_quotation_item_id integer) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.release_all_extract_locks() TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.remove_extract_alt_pn(p_quotation_item_id integer, p_alt text) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.remove_extract_item(p_quotation_item_id integer) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.save_all_extract_drafts(p_quotation_id integer) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.set_extract_description(p_quotation_item_id integer, p_description text) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.set_extract_pn(p_quotation_item_id integer, p_part_number text, p_mode text) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.set_extract_unclear(p_quotation_item_id integer, p_reason text, p_clear boolean) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.upload_batch_delete_data(p_batch_id bigint) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.upload_batch_get(p_batch_id bigint, p_state text, p_limit integer, p_offset integer) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.upload_batch_publish(p_batch_id bigint) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.upload_batch_recompute(p_batch_id bigint) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.upload_batch_reprocess(p_batch_id bigint) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.upload_batch_reprocess_enqueue(p_batch_id bigint) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.upload_batch_set_source(p_batch_id bigint, p_vendor_id bigint) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.upload_batch_stage(p_template_key text, p_file_name text, p_rows jsonb, p_source_kind text, p_source_id bigint, p_source_label text, p_branch_scope text, p_branch_ids bigint[]) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.upload_clean_row(p_raw jsonb, p_template_key text, p_source_kind text, p_source_id bigint) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.upload_code_rule_impact(p_rule_id bigint, p_source_kind text, p_source_id bigint, p_code text, p_position text) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.upload_code_rule_save(p_rule_id bigint, p_patch jsonb, p_confirm boolean, p_reprocess_published boolean) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.upload_delete_decide(p_request_id bigint, p_approve boolean, p_note text) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.upload_delete_request(p_batch_id bigint, p_reason text) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.upload_job_get(p_batch_id bigint) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.upload_page_get() TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.upload_row_update(p_row_id bigint, p_patch jsonb) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.uploaded_data_get(p_template_key text, p_status text, p_search text, p_limit integer, p_offset integer) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_avatars_pending(p_limit integer) TO service_role;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_check_passcode(p_code text) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_claim_outbox(p_limit integer) TO service_role;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_compare_offers(p_quotation_id integer) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_complete_outbox(p_outbox_id bigint, p_ok boolean, p_wa_message_id text, p_error text) TO service_role;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_create_vendor_from_contact(p_wa_contact_id bigint, p_vendor_name text) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_delete_message(p_message_id bigint, p_revoke boolean) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_delete_thread(p_thread_id bigint, p_purge_messages boolean) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_forward_message(p_message_id bigint, p_target_thread_id bigint, p_note text) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_forward_targets(p_exclude_thread bigint, p_query text) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_get_device_state() TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_get_thread(p_thread_id bigint, p_limit integer) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_ingest_message(p_wa_message_id text, p_jid text, p_phone text, p_display_name text, p_body text, p_media_url text, p_media_mime text, p_wa_timestamp timestamp with time zone, p_raw jsonb, p_media_kind text, p_media_name text, p_chat_type text, p_sender_jid text, p_sender_name text, p_reply_to_wa_id text) TO service_role;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_ingest_outbound(p_wa_message_id text, p_jid text, p_phone text, p_body text, p_media_url text, p_media_mime text, p_wa_timestamp timestamp with time zone, p_raw jsonb, p_media_kind text, p_media_name text, p_reply_to_wa_id text) TO service_role;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_is_internal() TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_link_contact(p_wa_contact_id bigint, p_vendor_id integer, p_vendor_branch_id bigint, p_display_name text) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_list_assignees() TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_list_threads(p_status text, p_search text, p_only_mine boolean, p_limit integer, p_offset integer, p_channel text) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_mark_read(p_thread_id bigint) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_norm_phone(p_phone text) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_norm_phone(p_phone text) TO service_role;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_note_quote_superseded() TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_note_quote_superseded() TO service_role;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_notify_colleague(p_thread_id bigint, p_user_id uuid, p_note text) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_request_pairing(p_disconnect boolean) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_search_orders(p_query text, p_limit integer) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_search_vendors(p_query text, p_limit integer) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_send_message(p_thread_id bigint, p_body text, p_media_url text, p_media_mime text, p_is_internal_note boolean, p_media_kind text, p_media_name text, p_reply_to_message_id bigint) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_set_avatar(p_wa_contact_id bigint, p_avatar_path text, p_avatar_id text, p_push_name text) TO service_role;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_set_device_state(p_device_id text, p_state text, p_jid text, p_qr_png text, p_qr_ttl_seconds integer, p_error text, p_clear_pair_request boolean) TO service_role;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_set_typing(p_phone text, p_seconds integer) TO service_role;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_start_thread(p_phone text, p_vendor_id integer, p_display_name text) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_thread_orders(p_thread_id bigint, p_limit integer) TO authenticated;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_update_delivery(p_wa_message_id text, p_status text) TO service_role;
+GRANT EXECUTE ON FUNCTION qvm_new_apps.wa_update_thread(p_thread_id bigint, p_status text, p_assigned_to uuid, p_clear_assignee boolean, p_quotation_id integer, p_clear_quotation boolean) TO authenticated;
