@@ -49,14 +49,10 @@ serve(async (req) => {
 
     const { data: callerData, error: callerDataError } = await db
       .from("user_data")
-      .select("user_type, user_company")
+      .select("user_type, user_role, user_company")
       .eq("user_id", callerAuth.user.id)
       .maybeSingle();
     if (callerDataError) return jsonResponse({ status: "fail", message: callerDataError.message }, 500);
-
-    const isInternal = callerData?.user_type === 185;
-    const sameCompany = callerData?.user_company != null && callerData.user_company === target.user_company;
-    if (!isInternal || !sameCompany) return jsonResponse({ status: "fail", message: "Not authorized" }, 403);
 
     const { data: roleRows } = await db
       .from("list_data")
@@ -64,6 +60,12 @@ serve(async (req) => {
       .eq("lists.list_name", "user_role")
       .eq("list_data", "Qparts Admin");
     const qpartsAdminRoleId = (roleRows ?? []).find((r: any) => r.list_data === "Qparts Admin")?.list_data_id;
+
+    // Only Qparts Admin accounts may delete internal sub-users.
+    const isInternal = callerData?.user_type === 185;
+    const isQpartsAdmin = qpartsAdminRoleId != null && callerData?.user_role === qpartsAdminRoleId;
+    const sameCompany = callerData?.user_company != null && callerData.user_company === target.user_company;
+    if (!isInternal || !isQpartsAdmin || !sameCompany) return jsonResponse({ status: "fail", message: "Not authorized: Qparts Admin only" }, 403);
 
     // Qparts Admin accounts can never be deleted from this page, regardless of how many exist.
     if (qpartsAdminRoleId && target.user_role === qpartsAdminRoleId) {

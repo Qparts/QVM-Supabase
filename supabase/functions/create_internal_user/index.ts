@@ -12,6 +12,7 @@ type CreateInternalUserBody = {
   password: string;
   user_name: string;
   branch_ids?: number[];
+  can_update_selling_price?: boolean;
 };
 
 serve(async (req) => {
@@ -41,6 +42,7 @@ serve(async (req) => {
     const password = String(body.password || "").trim();
     const userName = String(body.user_name || "").trim();
     const branchIds = Array.isArray(body.branch_ids) ? body.branch_ids.map(Number) : [];
+    const canUpdateSellingPrice = body.can_update_selling_price === true;
 
     if (!email || !password || !userName) {
       return new Response(
@@ -60,7 +62,7 @@ serve(async (req) => {
     const { data: callerData, error: callerDataError } = await supabaseAdmin
       .schema("qvm_new_apps")
       .from("user_data")
-      .select("user_type, user_company")
+      .select("user_type, user_role, user_company")
       .eq("user_id", callerAuth.user.id)
       .maybeSingle();
     if (callerDataError) {
@@ -72,17 +74,19 @@ serve(async (req) => {
       .from("list_data")
       .select("list_data_id, list_data, lists!inner(list_name)")
       .eq("lists.list_name", "user_role")
-      .eq("list_data", "Internal Branch User");
+      .in("list_data", ["Internal Branch User", "Qparts Admin"]);
 
     const internalBranchUserRoleId = (roleRows ?? []).find((r: any) => r.list_data === "Internal Branch User")?.list_data_id;
     if (!internalBranchUserRoleId) {
       return new Response(JSON.stringify({ status: "fail", message: "Internal role lookup failed" }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
+    const qpartsAdminRoleId = (roleRows ?? []).find((r: any) => r.list_data === "Qparts Admin")?.list_data_id;
 
-    // Any internal user can create a sub-user under their own company — not just Qparts Admin.
+    // Only Qparts Admin accounts may create internal sub-users.
     const isInternal = callerData?.user_type === 185;
-    if (!isInternal) {
-      return new Response(JSON.stringify({ status: "fail", message: "Not authorized" }), { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    const isQpartsAdmin = qpartsAdminRoleId != null && callerData?.user_role === qpartsAdminRoleId;
+    if (!isInternal || !isQpartsAdmin) {
+      return new Response(JSON.stringify({ status: "fail", message: "Not authorized: Qparts Admin only" }), { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
     const companyId = callerData?.user_company;
@@ -126,6 +130,7 @@ serve(async (req) => {
         user_type: 185,
         user_role: internalBranchUserRoleId,
         user_company: companyId,
+        can_update_selling_price: canUpdateSellingPrice,
       });
     if (userDataError) {
       await supabaseAdmin.auth.admin.deleteUser(newUserId);

@@ -13,6 +13,7 @@ type UpdateInternalUserBody = {
   email?: string;
   password?: string;
   branch_ids?: number[];
+  can_update_selling_price?: boolean;
 };
 
 function jsonResponse(body: unknown, status = 200) {
@@ -53,22 +54,25 @@ serve(async (req) => {
 
     const { data: callerData, error: callerDataError } = await db
       .from("user_data")
-      .select("user_type, user_company")
+      .select("user_type, user_role, user_company")
       .eq("user_id", callerAuth.user.id)
       .maybeSingle();
     if (callerDataError) return jsonResponse({ status: "fail", message: callerDataError.message }, 500);
 
-    const isInternal = callerData?.user_type === 185;
-    const sameCompany = callerData?.user_company != null && callerData.user_company === target.user_company;
-    if (!isInternal || !sameCompany) return jsonResponse({ status: "fail", message: "Not authorized" }, 403);
-
-    // Qparts Admin accounts cannot be edited from this page either.
     const { data: roleRows } = await db
       .from("list_data")
       .select("list_data_id, list_data, lists!inner(list_name)")
       .eq("lists.list_name", "user_role")
       .eq("list_data", "Qparts Admin");
     const qpartsAdminRoleId = (roleRows ?? []).find((r: any) => r.list_data === "Qparts Admin")?.list_data_id;
+
+    // Only Qparts Admin accounts may update internal sub-users.
+    const isInternal = callerData?.user_type === 185;
+    const isQpartsAdmin = qpartsAdminRoleId != null && callerData?.user_role === qpartsAdminRoleId;
+    const sameCompany = callerData?.user_company != null && callerData.user_company === target.user_company;
+    if (!isInternal || !isQpartsAdmin || !sameCompany) return jsonResponse({ status: "fail", message: "Not authorized: Qparts Admin only" }, 403);
+
+    // Qparts Admin accounts cannot be edited from this page either.
     if (qpartsAdminRoleId && target.user_role === qpartsAdminRoleId) {
       return jsonResponse({ status: "fail", message: "Qparts Admin accounts cannot be updated from this page" }, 400);
     }
@@ -101,6 +105,7 @@ serve(async (req) => {
     const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
     if (body.user_name?.trim()) updates.user_name = body.user_name.trim();
     if (newEmail) updates.email = newEmail;
+    if (typeof body.can_update_selling_price === 'boolean') updates.can_update_selling_price = body.can_update_selling_price;
 
     const { error: updateError } = await db.from("user_data").update(updates).eq("user_id", targetUserId);
     if (updateError) return jsonResponse({ status: "fail", message: updateError.message }, 500);
