@@ -81,7 +81,16 @@ serve(async (req) => {
     // the moment the user has any history. user_data.user_id has no FK to auth.users, so deleting
     // only the auth account already fully revokes login/access; deleted_at just hides them from the
     // Internal Users list while preserving every historical reference.
-    const { error: softDeleteError } = await db.from("user_data").update({ deleted_at: new Date().toISOString() }).eq("user_id", targetUserId);
+    //
+    // user_data's primary key is actually `email` (not user_id) — tombstone it here so the original
+    // address is freed up for a brand new account. Confirmed live: recreating a user with a
+    // previously-deleted email failed with "duplicate key value violates unique constraint
+    // user_data_pkey" because the old (undeleted) email still occupied the PK.
+    const tombstonedEmail = `deleted+${targetUserId}+${target.email}`;
+    const { error: softDeleteError } = await db
+      .from("user_data")
+      .update({ deleted_at: new Date().toISOString(), email: tombstonedEmail })
+      .eq("user_id", targetUserId);
     if (softDeleteError) return jsonResponse({ status: "fail", message: softDeleteError.message }, 500);
 
     const { error: deleteAuthError } = await supabaseAdmin.auth.admin.deleteUser(targetUserId);
