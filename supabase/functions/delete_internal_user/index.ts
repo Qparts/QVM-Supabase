@@ -75,8 +75,14 @@ serve(async (req) => {
     const { error: deleteBranchesError } = await db.from("internal_user_branches").delete().eq("user_id", targetUserId);
     if (deleteBranchesError) return jsonResponse({ status: "fail", message: deleteBranchesError.message }, 500);
 
-    const { error: deleteDataError } = await db.from("user_data").delete().eq("user_id", targetUserId);
-    if (deleteDataError) return jsonResponse({ status: "fail", message: deleteDataError.message }, 500);
+    // user_data is never hard-deleted: dozens of tables (status_logs, pricing_logs, cost_logs,
+    // quotations.account_manager/service_advisor, purchase_orders.uploaded_by, notes, etc.)
+    // reference user_data(user_id) with NO ACTION for audit-trail purposes, so a hard delete fails
+    // the moment the user has any history. user_data.user_id has no FK to auth.users, so deleting
+    // only the auth account already fully revokes login/access; deleted_at just hides them from the
+    // Internal Users list while preserving every historical reference.
+    const { error: softDeleteError } = await db.from("user_data").update({ deleted_at: new Date().toISOString() }).eq("user_id", targetUserId);
+    if (softDeleteError) return jsonResponse({ status: "fail", message: softDeleteError.message }, 500);
 
     const { error: deleteAuthError } = await supabaseAdmin.auth.admin.deleteUser(targetUserId);
     if (deleteAuthError) return jsonResponse({ status: "fail", message: deleteAuthError.message }, 500);
