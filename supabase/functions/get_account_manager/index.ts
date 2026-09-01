@@ -60,9 +60,6 @@ serve(async (req) => {
     console.log(candidates, branch, error);
     /* 3️⃣ Evaluate candidates */
     for (const manager of candidates) {
-      const activeCount = await getActiveCount(supabase, manager);
-      if (activeCount > 7) continue;
-
       const available = await isAvailable(supabase, manager, slot, day);
       if (!available) continue;
 
@@ -115,16 +112,6 @@ function getDayColumn(): string {
   )
     .toLocaleDateString("en-US", { weekday: "long" })
     .toLowerCase();
-}
-
-async function getActiveCount(
-  supabase: any,
-  manager: string
-): Promise<number> {
-  const { data, error } = await supabase
-    .rpc('count_active_rfq_orders', { p_account_manager: manager });
-  if (error) throw error;
-  return data ?? 0;
 }
 
 async function isAvailable(
