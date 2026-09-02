@@ -14,7 +14,7 @@ AS $function$BEGIN
     RETURN NEW;
   END IF;
   PERFORM net.http_post(
-    url := 'https://exizrhlkxoqljiypzwyx.supabase.co/functions/v1/update_item_status_in_sheet',
+    url := 'https://vvkulhfjtznozgxiqluj.supabase.co/functions/v1/update_item_status_in_sheet',
     headers := jsonb_build_object('Content-Type', 'application/json'),
     body := jsonb_build_object('quotation_item_id', NEW.quotation_item_id, 'created_by', auth.uid()));
   RETURN NEW;
@@ -31,7 +31,7 @@ BEGIN
   SELECT list_data_id INTO v_sent  FROM qvm_new_apps.list_data WHERE list_id = 3 AND list_data = 'Sent To Vendor' LIMIT 1;
   IF OLD.item_status = v_added AND NEW.item_status = v_sent THEN
     PERFORM net.http_post(
-      url := 'https://exizrhlkxoqljiypzwyx.supabase.co/functions/v1/write_item_to_sheet',
+      url := 'https://vvkulhfjtznozgxiqluj.supabase.co/functions/v1/write_item_to_sheet',
       headers := jsonb_build_object('Content-Type', 'application/json'),
       body := jsonb_build_object('quotation_item_id', NEW.quotation_item_id, 'quotation_id', NEW.quotation_id, 'created_by', auth.uid()));
   END IF;
@@ -45,7 +45,7 @@ SECURITY DEFINER
 SET search_path TO 'qvm_new_apps', 'extensions', 'public'
 AS $function$
 DECLARE
-  v_url text := 'https://exizrhlkxoqljiypzwyx.supabase.co/functions/v1/write_price_to_sheet';
+  v_url text := 'https://vvkulhfjtznozgxiqluj.supabase.co/functions/v1/write_price_to_sheet';
   v_headers jsonb := jsonb_build_object('Content-Type', 'application/json');
   v_ids jsonb;
 BEGIN
@@ -144,7 +144,7 @@ BEGIN
   IF p_from_frontend THEN
     BEGIN
       PERFORM net.http_post(
-        url     := 'https://exizrhlkxoqljiypzwyx.supabase.co/functions/v1/write_item_to_sheet',
+        url     := 'https://vvkulhfjtznozgxiqluj.supabase.co/functions/v1/write_item_to_sheet',
         headers := jsonb_build_object('Content-Type', 'application/json'),
         body    := jsonb_build_object('quotation_item_id', v_item_id, 'quotation_id', p_quotation_id, 'created_by', auth.uid())
       );
