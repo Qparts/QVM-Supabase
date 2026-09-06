@@ -76,6 +76,25 @@ Deno.serve(async (req) => {
       });
     }
 
+    // The DB work below runs on a raw pool connection, which carries no JWT — so auth.uid() was
+    // NULL for the whole transaction and purchase_orders.created_by came out empty on every PO
+    // sent this way. Resolve the caller here and replay their identity onto the connection.
+    // Verified through the auth server rather than decoded locally: the header was previously only
+    // checked for existence, so any non-empty value got in.
+    const token = authHeader.replace(/^Bearer\s+/i, "");
+    const { data: authData, error: authError } = await createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    ).auth.getUser(token);
+
+    if (authError || !authData?.user?.id) {
+      return new Response(JSON.stringify({ status: "fail", message: "Not authorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const actingUserId = authData.user.id;
+
     const body = await req.json();
     const { po_items, quotation_id, webhook_payload } = body as {
       po_items: unknown;
@@ -94,6 +113,12 @@ Deno.serve(async (req) => {
     const conn = await pool.connect();
     try {
       await conn.queryArray("BEGIN");
+
+      // Scoped to this transaction (set_config local = true), so auth.uid() resolves for the RPC
+      // and for every trigger it fires — created_by/updated_by, status_logs.status_changed_by.
+      await conn.queryArray("SELECT set_config('request.jwt.claims', $1, true)", [
+        JSON.stringify({ sub: actingUserId, role: "authenticated" }),
+      ]);
 
       let rpcResult: unknown;
       try {
