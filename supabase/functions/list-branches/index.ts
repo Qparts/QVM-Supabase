@@ -128,14 +128,42 @@ Deno.serve(async (req) => {
     }
 
     const list = Array.isArray(payload) ? payload : [];
-    const branches = list.map((b) => normalise(b as Record<string, unknown>));
+
+    // Hand the payload to the database, which records it in qvm_new_apps.supabase_branches and
+    // returns what it now holds. That is what makes branches answerable in plain SQL afterwards —
+    // a report or an RPC can read the table without needing a management token of its own.
+    // Called with the service-role client: sync_supabase_branches is granted to service_role alone.
+    const { data: synced, error: syncError } = await admin
+      .schema("qvm_new_apps")
+      .rpc("sync_supabase_branches", { p_parent_ref: parentRef, p_branches: list });
+
+    if (syncError) {
+      // The fetch worked, so still answer with the live data rather than failing outright; the
+      // caller gets the branches and a clear note that the stored copy is now stale.
+      console.error("list-branches: sync failed:", syncError.message);
+      return json({
+        status: "partial",
+        message: `Fetched from the Management API, but storing them failed: ${syncError.message}`,
+        parent_project_ref: parentRef,
+        count: list.length,
+        branches: list.map((b) => normalise(b as Record<string, unknown>)),
+      });
+    }
+
+    if (!synced?.success) {
+      return json({
+        status: "fail",
+        message: synced?.error ?? "sync_supabase_branches rejected the payload",
+      }, 400);
+    }
 
     return json({
       status: "success",
       parent_project_ref: parentRef,
-      count: branches.length,
-      branches,
-      raw: payload,
+      count: Array.isArray(synced.branches) ? synced.branches.length : 0,
+      synced: synced.synced,
+      removed: synced.removed,
+      branches: synced.branches,
     });
   } catch (err) {
     console.error("list-branches error:", err);
