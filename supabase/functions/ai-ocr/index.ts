@@ -10,11 +10,35 @@
 // and the response are Gemini's own, unchanged, so the parsing, the schema, the usage
 // accounting and the error classification on the client all keep working exactly as they did.
 
-const GEMINI_KEY = Deno.env.get('GEMINI_API_KEY') ?? '';
 const DEFAULT_MODEL = Deno.env.get('GEMINI_MODEL') ?? 'gemini-flash-lite-latest';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
+const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+
+/**
+ * The key, from the database rather than the deploy environment.
+ *
+ * An Edge Function secret would also keep it off the client, but only a project admin can
+ * change one — and rotating an AI key is an operations job, not a deploy. It is stored in
+ * service_credentials, which no RPC reads back and which only this role can select.
+ *
+ * The environment variable still wins if it is set, so an existing deployment keeps working
+ * and nothing has to be migrated in a particular order.
+ */
+async function geminiKey(): Promise<string> {
+  const fromEnv = Deno.env.get('GEMINI_API_KEY');
+  if (fromEnv) return fromEnv;
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/service_credentials?service=eq.gemini&select=api_key,is_active`,
+    { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`,
+                 'Accept-Profile': 'qvm_new_apps' } },
+  );
+  if (!res.ok) return '';
+  const rows = await res.json().catch(() => []);
+  const row = Array.isArray(rows) ? rows[0] : null;
+  return row?.is_active === false ? '' : (row?.api_key ?? '');
+}
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -49,12 +73,14 @@ Deno.serve(async (req) => {
     });
   }
 
+  const GEMINI_KEY = await geminiKey();
+
   // Said plainly and with its own code, so the screen can tell «nobody has configured this»
   // apart from «the provider refused us» — they need different people to fix them.
   if (!GEMINI_KEY) {
     return new Response(
       JSON.stringify({ error: { code: 412, status: 'AI_NOT_CONFIGURED',
-        message: 'GEMINI_API_KEY is not set on the server.' } }),
+        message: 'No Gemini key is configured on the server.' } }),
       { status: 412, headers: { ...cors, 'Content-Type': 'application/json' } },
     );
   }
@@ -85,6 +111,19 @@ Deno.serve(async (req) => {
   // success and how to classify a Gemini failure; rewriting either here would mean two
   // places that have to agree about what «out of credit» looks like.
   const text = await upstream.text();
+
+  // What actually happened when we called the provider, so a screen can say «worked at
+  // 14:32» or «out of credit» rather than only «a key is present».
+  fetch(`${SUPABASE_URL}/rest/v1/rpc/service_credential_record_test`, {
+    method: 'POST',
+    headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`,
+               'Content-Type': 'application/json', 'Content-Profile': 'qvm_new_apps' },
+    body: JSON.stringify({
+      p_service: 'gemini', p_ok: upstream.ok,
+      p_note: upstream.ok ? `HTTP ${upstream.status}` : text.slice(0, 300),
+    }),
+  }).catch(() => { /* telemetry must never break the call it describes */ });
+
   return new Response(text, {
     status: upstream.status,
     headers: { ...cors, 'Content-Type': 'application/json' },
