@@ -29,15 +29,23 @@ const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 async function geminiKey(): Promise<string> {
   const fromEnv = Deno.env.get('GEMINI_API_KEY');
   if (fromEnv) return fromEnv;
-  const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/service_credentials?service=eq.gemini&select=api_key,is_active`,
-    { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`,
-                 'Accept-Profile': 'qvm_new_apps' } },
-  );
+  // Through a function, not the table. The table has no SELECT grant — deliberately, so that
+  // anything holding the service role cannot read every credential we store — and reading it
+  // directly came back empty, which the function then reported as «no key configured» while
+  // the settings screen showed the key as present.
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/service_credential_key`, {
+    method: 'POST',
+    headers: {
+      apikey: SERVICE_KEY,
+      Authorization: `Bearer ${SERVICE_KEY}`,
+      'Content-Type': 'application/json',
+      'Content-Profile': 'qvm_new_apps',
+    },
+    body: JSON.stringify({ p_service: 'gemini' }),
+  });
   if (!res.ok) return '';
-  const rows = await res.json().catch(() => []);
-  const row = Array.isArray(rows) ? rows[0] : null;
-  return row?.is_active === false ? '' : (row?.api_key ?? '');
+  const key = await res.json().catch(() => null);
+  return typeof key === 'string' ? key : '';
 }
 
 const cors = {
@@ -58,6 +66,30 @@ async function callerIsSignedIn(req: Request): Promise<boolean> {
   return res.ok;
 }
 
+/**
+ * The other kind of caller: a vendor pricing a quote from the emailed link.
+ *
+ * They have no account and no session by design — one opaque, time-limited token stands in
+ * for both, and it is already what lets them read the quote and save prices against it. A
+ * visitor holding a live one is exactly the person entitled to have their own price list
+ * read, so it is accepted here too. An expired or unknown token is not a caller.
+ */
+async function quoteTokenIsLive(token: string): Promise<boolean> {
+  if (!/^[0-9a-f-]{36}$/i.test(token)) return false;
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/quote_token_is_live`, {
+    method: 'POST',
+    headers: {
+      apikey: SERVICE_KEY,
+      Authorization: `Bearer ${SERVICE_KEY}`,
+      'Content-Type': 'application/json',
+      'Content-Profile': 'qvm_new_apps',
+    },
+    body: JSON.stringify({ p_token: token }),
+  });
+  if (!res.ok) return false;
+  return (await res.json().catch(() => false)) === true;
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
 
@@ -67,7 +99,22 @@ Deno.serve(async (req) => {
     });
   }
 
-  if (!(await callerIsSignedIn(req))) {
+  // The body is read once, here, because the magic-link caller proves itself with a value
+  // inside it rather than with a header.
+  let payload: Record<string, unknown> = {};
+  try {
+    payload = await req.json();
+  } catch {
+    return new Response(JSON.stringify({ error: { code: 400, message: 'bad json' } }), {
+      status: 400, headers: { ...cors, 'Content-Type': 'application/json' },
+    });
+  }
+
+  const quoteToken = String(payload.quote_token ?? '');
+  const allowed = (await callerIsSignedIn(req))
+    || (quoteToken ? await quoteTokenIsLive(quoteToken) : false);
+
+  if (!allowed) {
     return new Response(JSON.stringify({ error: { code: 401, message: 'unauthorized' } }), {
       status: 401, headers: { ...cors, 'Content-Type': 'application/json' },
     });
@@ -83,15 +130,6 @@ Deno.serve(async (req) => {
         message: 'No Gemini key is configured on the server.' } }),
       { status: 412, headers: { ...cors, 'Content-Type': 'application/json' } },
     );
-  }
-
-  let payload: Record<string, unknown>;
-  try {
-    payload = await req.json();
-  } catch {
-    return new Response(JSON.stringify({ error: { code: 400, message: 'bad json' } }), {
-      status: 400, headers: { ...cors, 'Content-Type': 'application/json' },
-    });
   }
 
   // The model is the client's to choose only from a name; the key and the host are not.
