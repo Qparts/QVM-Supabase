@@ -438,6 +438,12 @@ verify_jwt = true
 enabled = true
 verify_jwt = false
 
+# Client-side logins for a workshop. verify_jwt is false to match its sibling above; the function
+# does its own Qparts-Admin check on the caller's token before it creates anything.
+[functions.create_client_user]
+enabled = true
+verify_jwt = false
+
 [functions.create_quotation_with_items]
 enabled = true
 verify_jwt = false
