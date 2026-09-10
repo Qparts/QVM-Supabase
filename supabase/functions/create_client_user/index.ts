@@ -86,24 +86,33 @@ serve(async (req) => {
     }
 
     // The workshop decides the company; nothing is taken from the caller.
-    const { data: workshop } = await admin
+    const { data: workshop, error: workshopError } = await admin
       .schema("qvm_new_apps")
       .from("client_workshops")
       .select("workshop_id, company_id")
       .eq("workshop_id", workshopId)
       .maybeSingle();
-    if (!workshop) return json({ status: "fail", message: "Workshop not found" }, 404);
+    // Ignoring the error here once cost an afternoon: a missing grant on the table came back as
+    // "Workshop not found" for a workshop that plainly existed. A query that FAILED and a query
+    // that found nothing are different answers and must read differently.
+    if (workshopError) {
+      return json({ status: "fail", message: `Could not read the workshop: ${workshopError.message}` }, 500);
+    }
+    if (!workshop) return json({ status: "fail", message: `Workshop ${workshopId} not found` }, 404);
 
     // Every branch named must belong to that workshop — a stale id from the browser must not be
     // able to hand someone a branch in another company.
     const named = [...new Set([...managerBranchIds, ...plainBranchIds])];
     if (named.length > 0) {
-      const { data: branches } = await admin
+      const { data: branches, error: branchError } = await admin
         .schema("qvm_new_apps")
         .from("client_branches")
         .select("customer_id")
         .eq("workshop_id", workshopId)
         .in("customer_id", named);
+      if (branchError) {
+        return json({ status: "fail", message: `Could not read the branches: ${branchError.message}` }, 500);
+      }
       if ((branches ?? []).length !== named.length) {
         return json({ status: "fail", message: "One or more branches do not belong to this workshop" }, 400);
       }
