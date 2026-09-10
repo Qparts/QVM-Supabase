@@ -5,9 +5,13 @@
 // orders raised there assigned to them. A user can be both — the two are independent, which is what
 // lets one workshop have a different manager per branch without any of them owning the whole thing.
 //
-// Qparts Admin only (user_type 185, user_role 172). Creating an auth account needs the service role,
-// which is why this is an edge function and not an RPC; everything after the account exists is done
-// through admin_set_user_scope so the scoping rules live in one place.
+// It also creates the two internal accounts: a COMPANY USER, who sees every branch of every workshop
+// serving one company, and a COMPANY ADMIN, who additionally runs that company — its workshops,
+// branches, managers and users.
+//
+// Qparts Admin, or a Company Admin acting inside their own company. Creating an auth account needs
+// the service role, which is why this is an edge function and not an RPC; everything after the
+// account exists is done through admin_set_user_scope so the scoping rules live in one place.
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -22,6 +26,7 @@ const INTERNAL_USER_TYPE = 185;
 const ROLE_CLIENT_ADMIN = 170;          // workshop user
 const ROLE_BRANCH_MANAGER = 195;        // branch manager
 const ROLE_INTERNAL_BRANCH_USER = 271;  // company user: the whole menu, narrowed data
+const ROLE_QPARTS_ADMIN = 172;
 
 type Body = {
   email: string;
@@ -41,6 +46,11 @@ type Body = {
   branch_ids?: number[];
   /** true → sees the whole workshop; false → only the branches listed above. */
   is_workshop_user?: boolean;
+  /**
+   * Company mode only: make this account a Company Admin rather than a plain company user — it runs
+   * the company's tree as well as reading its data.
+   */
+  is_company_admin?: boolean;
 };
 
 const json = (body: unknown, status = 200) =>
@@ -68,8 +78,35 @@ serve(async (req) => {
       .eq("user_id", callerAuth.user.id)
       .maybeSingle();
 
-    if (!caller || caller.user_type !== 185 || caller.user_role !== 172) {
+    // The Company Admin role is minted per environment, so it is resolved by name rather than
+    // written here as a number that would be right on one branch and wrong on the next.
+    const { data: companyAdminRole } = await admin
+      .schema("qvm_new_apps")
+      .rpc("company_admin_role_id");
+    const ROLE_COMPANY_ADMIN = companyAdminRole ? Number(companyAdminRole) : null;
+
+    const callerIsQpartsAdmin = caller?.user_type === INTERNAL_USER_TYPE && caller?.user_role === ROLE_QPARTS_ADMIN;
+    const callerIsCompanyAdmin = !!caller && ROLE_COMPANY_ADMIN !== null && caller.user_role === ROLE_COMPANY_ADMIN;
+
+    if (!callerIsQpartsAdmin && !callerIsCompanyAdmin) {
       return json({ status: "fail", message: "Access denied: Qparts Admin only" }, 403);
+    }
+
+    /** The companies a Company Admin runs. Empty for a Qparts Admin, who is never checked against it. */
+    let callerCompanies: number[] = [];
+    if (callerIsCompanyAdmin) {
+      const { data: own, error: ownError } = await admin
+        .schema("qvm_new_apps")
+        .from("user_companies")
+        .select("company_id")
+        .eq("user_id", callerAuth.user.id);
+      if (ownError) {
+        return json({ status: "fail", message: `Could not read your companies: ${ownError.message}` }, 500);
+      }
+      callerCompanies = (own ?? []).map((r) => Number(r.company_id));
+      if (callerCompanies.length === 0) {
+        return json({ status: "fail", message: "Access denied: your account has no company" }, 403);
+      }
     }
 
     const body = (await req.json()) as Body;
@@ -79,6 +116,7 @@ serve(async (req) => {
     const workshopId = body.workshop_id ? Number(body.workshop_id) : null;
     const companyId = body.company_id ? Number(body.company_id) : null;
     const isWorkshopUser = body.is_workshop_user === true;
+    const wantsCompanyAdmin = body.is_company_admin === true;
     const managerBranchIds = Array.isArray(body.manager_branch_ids) ? body.manager_branch_ids.map(Number) : [];
     const plainBranchIds = Array.isArray(body.branch_ids) ? body.branch_ids.map(Number) : [];
 
@@ -94,6 +132,15 @@ serve(async (req) => {
         message: "Give a workshop or a company, not both — they are different kinds of account",
       }, 400);
     }
+    if (wantsCompanyAdmin && !companyId) {
+      return json({
+        status: "fail",
+        message: "A Company Admin belongs to a company — give company_id, not workshop_id",
+      }, 400);
+    }
+    if (wantsCompanyAdmin && ROLE_COMPANY_ADMIN === null) {
+      return json({ status: "fail", message: "The Company Admin role is missing from this environment" }, 500);
+    }
     if (password.length < 6) {
       return json({ status: "fail", message: "Password must be at least 6 characters" }, 400);
     }
@@ -106,6 +153,10 @@ serve(async (req) => {
 
     // ---------------------------------------------------------------- company-level user
     if (companyId) {
+      if (callerIsCompanyAdmin && !callerCompanies.includes(companyId)) {
+        return json({ status: "fail", message: "Access denied: this company is not yours to administer" }, 403);
+      }
+
       const { data: company, error: companyError } = await admin
         .schema("qvm_new_apps")
         .from("client_companies")
@@ -133,7 +184,7 @@ serve(async (req) => {
           user_name: userName,
           email,
           user_type: INTERNAL_USER_TYPE,
-          user_role: ROLE_INTERNAL_BRANCH_USER,
+          user_role: wantsCompanyAdmin ? ROLE_COMPANY_ADMIN : ROLE_INTERNAL_BRANCH_USER,
           user_company: companyId,
         });
       if (profileError) {
@@ -157,7 +208,9 @@ serve(async (req) => {
         status: "success",
         user_id: newUserId,
         scope: scopeResult,
-        message: "Company user created — sees every branch of this company",
+        message: wantsCompanyAdmin
+          ? "Company Admin created — runs this company and sees every branch of it"
+          : "Company user created — sees every branch of this company",
       });
     }
 
@@ -175,6 +228,27 @@ serve(async (req) => {
       return json({ status: "fail", message: `Could not read the workshop: ${workshopError.message}` }, 500);
     }
     if (!workshop) return json({ status: "fail", message: `Workshop ${workshopId} not found` }, 404);
+
+    // A workshop serves any number of companies; a Company Admin may staff it if one of them is
+    // theirs. The workshop's own company_id is checked too — it is set for a workshop that has not
+    // been through the many-to-many assignment yet.
+    if (callerIsCompanyAdmin) {
+      const { data: served, error: servedError } = await admin
+        .schema("qvm_new_apps")
+        .from("workshop_companies")
+        .select("company_id")
+        .eq("workshop_id", workshopId);
+      if (servedError) {
+        return json({ status: "fail", message: `Could not read the workshop's companies: ${servedError.message}` }, 500);
+      }
+      const companiesServed = new Set([
+        ...(served ?? []).map((r) => Number(r.company_id)),
+        ...(workshop.company_id ? [Number(workshop.company_id)] : []),
+      ]);
+      if (!callerCompanies.some((c) => companiesServed.has(c))) {
+        return json({ status: "fail", message: "Access denied: this workshop is not yours to administer" }, 403);
+      }
+    }
 
     // Every branch named must belong to that workshop — a stale id from the browser must not be
     // able to hand someone a branch in another company.
