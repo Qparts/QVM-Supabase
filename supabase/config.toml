@@ -380,3 +380,247 @@ s3_region = "env(S3_REGION)"
 s3_access_key = "env(S3_ACCESS_KEY)"
 # Configures AWS_SECRET_ACCESS_KEY for S3 bucket
 s3_secret_key = "env(S3_SECRET_KEY)"
+
+# ---------------------------------------------------------------------------------------------
+# Edge functions.
+#
+# The branch deploy publishes what is declared here, not what happens to sit in
+# supabase/functions — with this section absent it reported "No functions to deploy" on every
+# push, which is why every deployment so far has been manual.
+#
+# verify_jwt on each entry is the value that function already had live on QVM/dev when this was
+# written, read back from the API rather than assumed. 17 of these are public on purpose: the
+# n8n webhooks, the Google-sheet writers and the push sender are all called by things that hold
+# no user JWT, and flipping any of them to true would start rejecting those callers.
+# ---------------------------------------------------------------------------------------------
+
+[functions.activate_user_from_invite]
+enabled = true
+verify_jwt = true
+
+[functions.bulk-create-users]
+enabled = true
+verify_jwt = true
+
+[functions.bulk-rfq]
+enabled = true
+verify_jwt = true
+
+[functions.bulk_import_vendors]
+enabled = true
+verify_jwt = true
+
+[functions.bulk_update_items_in_sheet]
+enabled = true
+verify_jwt = true
+
+[functions.cancel_items]
+enabled = true
+verify_jwt = true
+
+[functions.caragy_orders]
+enabled = true
+verify_jwt = false
+
+[functions.caragy_test]
+enabled = true
+verify_jwt = false
+
+[functions.caragy_trial]
+enabled = true
+verify_jwt = false
+
+[functions.change_password]
+enabled = true
+verify_jwt = true
+
+[functions.create_internal_user]
+enabled = true
+verify_jwt = false
+
+# Client-side logins for a workshop. verify_jwt is false to match its sibling above; the function
+# does its own Qparts-Admin check on the caller's token before it creates anything.
+[functions.create_client_user]
+enabled = true
+verify_jwt = false
+
+[functions.create_quotation_with_items]
+enabled = true
+verify_jwt = false
+
+[functions.create_vendor_user]
+enabled = true
+verify_jwt = true
+
+[functions.delete_internal_user]
+enabled = true
+verify_jwt = false
+
+[functions.delete_vendor_user]
+enabled = true
+verify_jwt = true
+
+[functions.email-otp]
+enabled = true
+verify_jwt = true
+
+[functions.email_delivery_note]
+enabled = true
+verify_jwt = true
+
+[functions.extract-parts-from-image]
+enabled = true
+verify_jwt = false
+
+[functions.file-prompt-handling]
+enabled = true
+verify_jwt = true
+
+[functions.generate-pdf]
+enabled = true
+verify_jwt = true
+
+[functions.generate_quotation_pdf]
+enabled = true
+verify_jwt = true
+
+[functions.generate_sales_invoice]
+enabled = true
+verify_jwt = true
+
+[functions.geolocate-ips]
+enabled = true
+verify_jwt = true
+
+[functions.get_account_manager]
+enabled = true
+verify_jwt = false
+
+[functions.get_list_data]
+enabled = true
+verify_jwt = true
+
+[functions.get_user_profile]
+enabled = true
+verify_jwt = true
+
+[functions.list-branches]
+enabled = true
+verify_jwt = true
+
+[functions.list_archive_notes]
+enabled = true
+verify_jwt = true
+
+[functions.list_delivered_notes]
+enabled = true
+verify_jwt = true
+
+[functions.login_user]
+enabled = true
+verify_jwt = false
+
+[functions.qstock_lookup]
+enabled = true
+verify_jwt = true
+
+[functions.quick_send_item_webhook]
+enabled = true
+verify_jwt = true
+
+[functions.reassign_orders]
+enabled = true
+verify_jwt = true
+
+[functions.register-user]
+enabled = true
+verify_jwt = true
+
+[functions.regular-rfq]
+enabled = true
+verify_jwt = true
+
+[functions.resend-notify]
+enabled = true
+verify_jwt = true
+
+[functions.rfq-chat]
+enabled = true
+verify_jwt = false
+
+[functions.send-email]
+enabled = true
+verify_jwt = true
+
+[functions.send-push-notification]
+enabled = true
+verify_jwt = false
+
+[functions.send_po_webhook]
+enabled = true
+verify_jwt = true
+
+[functions.send_rfq_webhook]
+enabled = true
+verify_jwt = true
+
+[functions.submit_delivery_note]
+enabled = true
+verify_jwt = true
+
+[functions.submit_return_note]
+# Committed but never deployed. Set enabled = true when it is ready to go live.
+enabled = false
+verify_jwt = true
+
+[functions.update_cancel_reason]
+enabled = true
+verify_jwt = true
+
+[functions.update_internal_user]
+enabled = true
+verify_jwt = false
+
+[functions.update_item_description_in_sheet]
+enabled = true
+verify_jwt = true
+
+[functions.update_item_status_in_sheet]
+enabled = true
+verify_jwt = false
+
+[functions.update_rfq_item_status]
+enabled = true
+verify_jwt = true
+
+[functions.update_vendor_user]
+enabled = true
+verify_jwt = true
+
+[functions.upload-file]
+enabled = true
+verify_jwt = false
+
+[functions.upload_bulk_files]
+enabled = true
+verify_jwt = true
+
+[functions.upload_part_photos]
+enabled = true
+verify_jwt = true
+
+[functions.upload_vendor_attachment]
+enabled = true
+verify_jwt = true
+
+[functions.wa-bridge]
+enabled = true
+verify_jwt = false
+
+[functions.write_item_to_sheet]
+enabled = true
+verify_jwt = false
+
+[functions.write_price_to_sheet]
+enabled = true
+verify_jwt = false

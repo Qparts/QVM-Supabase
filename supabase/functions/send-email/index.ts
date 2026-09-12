@@ -30,12 +30,90 @@ type MailPayload = {
   order_number?: string;
   confirmed_order_id?: number;
 };
+// ---------------------------------------------------------------------------------- Gmail
+//
+// Preferred whenever GMAIL_* is configured. The Outlook path below still carries in-source
+// credential defaults that no longer authenticate ("token was issued for a different client id"),
+// and no OUTLOOK_* secrets are set, so without this the function fails before Resend — which is
+// also unconfigured — can catch it.
+
+const GMAIL_CLIENT_ID = Deno.env.get('GMAIL_CLIENT_ID');
+const GMAIL_CLIENT_SECRET = Deno.env.get('GMAIL_CLIENT_SECRET');
+const GMAIL_REFRESH_TOKEN = Deno.env.get('GMAIL_REFRESH_TOKEN');
+const GMAIL_FROM_EMAIL = Deno.env.get('GMAIL_FROM_EMAIL');
+const gmailConfigured = Boolean(GMAIL_CLIENT_ID && GMAIL_CLIENT_SECRET && GMAIL_REFRESH_TOKEN && GMAIL_FROM_EMAIL);
+
+async function gmailAccessToken(): Promise<string> {
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: GMAIL_CLIENT_ID!,
+      client_secret: GMAIL_CLIENT_SECRET!,
+      refresh_token: GMAIL_REFRESH_TOKEN!,
+      grant_type: 'refresh_token',
+    }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || !body.access_token) {
+    throw new Error(`Gmail token refresh failed (${res.status}): ${JSON.stringify(body).slice(0, 300)}`);
+  }
+  return body.access_token as string;
+}
+
+const b64 = (v: string) => btoa(unescape(encodeURIComponent(v)));
+
+/** RFC 2822 message, multipart only when something is actually attached. */
+function gmailRawMessage(to: string | string[], subject: string, html: string, attachments: Attachment[]): string {
+  const recipients = (Array.isArray(to) ? to : [to]).join(', ');
+  const headers =
+    `From: ${GMAIL_FROM_EMAIL}\r\n` +
+    `To: ${recipients}\r\n` +
+    `Subject: =?UTF-8?B?${b64(subject)}?=\r\n` +
+    `MIME-Version: 1.0\r\n`;
+
+  if (attachments.length === 0) {
+    return headers + `Content-Type: text/html; charset=UTF-8\r\n\r\n` + html;
+  }
+
+  const boundary = `qvm_${crypto.randomUUID()}`;
+  const parts = [
+    `--${boundary}\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n${html}\r\n`,
+    ...attachments.map((a) =>
+      `--${boundary}\r\n` +
+      `Content-Type: ${a.contentType}; name="${a.name}"\r\n` +
+      `Content-Disposition: attachment; filename="${a.name}"\r\n` +
+      `Content-Transfer-Encoding: base64\r\n\r\n` +
+      // Gmail rejects unwrapped base64 past 998 chars per line.
+      `${a.contentBase64.replace(/(.{76})/g, '$1\r\n')}\r\n`,
+    ),
+    `--${boundary}--`,
+  ];
+  return headers + `Content-Type: multipart/mixed; boundary="${boundary}"\r\n\r\n` + parts.join('');
+}
+
+async function sendGmailEmail(to: string | string[], subject: string, html: string, attachments: Attachment[] = []) {
+  const token = await gmailAccessToken();
+  const encoded = b64(gmailRawMessage(to, subject, html, attachments))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ raw: encoded }),
+  });
+  if (!res.ok) throw new Error(`Gmail send failed (${res.status}): ${(await res.text()).slice(0, 300)}`);
+  return true;
+}
+
 async function refreshAccessToken() {
-  const OUTLOOK_CLIENT_ID = Deno.env.get('OUTLOOK_CLIENT_ID') || '61100bdd-46c9-477b-b0c5-819bdf44071d';
-  const OUTLOOK_CLIENT_SECRET = Deno.env.get('OUTLOOK_CLIENT_SECRET') || 'eXU8Q~bWWCNubGfPah93xEa~XIH7gWFgVR3AaaP~';
+  // Credentials come from secrets only. The literals that used to sit here as defaults were live
+  // tokens committed to the repo, and dead ones at that — Microsoft rejects them with "the token
+  // was issued for a different client id", which is what made every send fail before Gmail was
+  // added above.
+  const OUTLOOK_CLIENT_ID = Deno.env.get('OUTLOOK_CLIENT_ID');
+  const OUTLOOK_CLIENT_SECRET = Deno.env.get('OUTLOOK_CLIENT_SECRET');
   const OUTLOOK_TENANT = Deno.env.get('OUTLOOK_TENANT') || 'consumers';
-  const REFRESH_TOKEN = Deno.env.get('OUTLOOK_REFRESH_TOKEN') || 'M.C555_BAY.0.U.-CqHDx5iOUT!gsyI45fgkkO3fF1ndCoI6RUYoItdKXgiWdJKfkOKzyVzDJ0Lrs81qakII7Of4CH4vefC2NkSgTl6TgpnPG8xxV1yCeONosggBAWnojJr03*!GrGo0jaN918iQBMeQOBJXyiWu8wExlibtvfiS3bYw3dL4a4g27MdIEjTAK4J7tZfdd25qf6eUvBiHpH4gNXMjlLZ*68jwigKMy2q8y5pFkQXk!UWHgHX2aulM9Ec!FcgGXAIQ7!6mg!QLNOWjH4iXB*aq1k8jFvUsfaBrUMPmyvICCpyqXnXCst!IxjOCDZhL4*SGoaVnoyZFK1NA!BzFQtwhryEyRLp3j*RhhAjial8TWFLedn4mecBBdS7jOcLEoC9xPzTvRw$$';
-  const OUTLOOK_USER = "almulhimauto@outlook.com";
+  const REFRESH_TOKEN = Deno.env.get('OUTLOOK_REFRESH_TOKEN');
 
   if (!OUTLOOK_CLIENT_ID || !OUTLOOK_CLIENT_SECRET || !REFRESH_TOKEN) {
     throw new Error('Outlook credentials are not configured');
@@ -95,6 +173,8 @@ serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: { ...cors } });
   }
+  // Declared out here so the final catch can report why the first provider declined.
+  let gmailError = '';
   try {
     // Parse body (multipart or JSON)
     let payload: MailPayload;
@@ -162,6 +242,23 @@ serve(async (req) => {
       }
     }
     if (!toResolved) throw new Error('Recipient not provided and could not be resolved');
+
+    // Gmail first when it is set up — it is the mailbox this project actually has credentials for.
+    // Outlook and Resend stay below as the paths for deployments configured that way.
+    if (gmailConfigured) {
+      try {
+        await sendGmailEmail(toResolved, payload.subject, payload.body, attachments);
+        return new Response(JSON.stringify({ success: true, provider: 'gmail' }), {
+          status: 200,
+          headers: { ...cors, 'Content-Type': 'application/json' },
+        });
+      } catch (gmailErr) {
+        // Kept for the final error: without it the caller only ever sees the last provider's
+        // complaint, which is how a dead Outlook token masked everything before it.
+        gmailError = String(gmailErr);
+        console.error('send-email: gmail failed, trying the next provider:', gmailError);
+      }
+    }
 
     // Get access token (fallback to Resend immediately if refresh fails)
     let token: string;
@@ -245,6 +342,13 @@ serve(async (req) => {
     return new Response(JSON.stringify({ success: true }), { status: 200, headers: { ...cors, 'Content-Type': 'application/json' } });
   } catch (err: any) {
     console.error('send-email error:', err?.message || err);
-    return new Response(JSON.stringify({ success: false, error: err?.message || 'Unexpected error' }), { status: 500, headers: { ...cors, 'Content-Type': 'application/json' } });
+    return new Response(
+      JSON.stringify({
+        success: false,
+        error: err?.message || 'Unexpected error',
+        ...(gmailError ? { gmail_error: gmailError } : {}),
+      }),
+      { status: 500, headers: { ...cors, 'Content-Type': 'application/json' } },
+    );
   }
 });

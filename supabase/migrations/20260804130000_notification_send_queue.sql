@@ -70,7 +70,7 @@ BEGIN
   WHERE ud.user_company = v_company_id AND dt.is_active;
 
   PERFORM net.http_post(
-    url := 'https://vvkulhfjtznozgxiqluj.supabase.co/functions/v1/send-push-notification',
+    url := 'https://exizrhlkxoqljiypzwyx.supabase.co/functions/v1/send-push-notification',
     headers := jsonb_build_object('Content-Type', 'application/json'),
     body := jsonb_build_object('notification_id', v_notification_id)
   );
@@ -123,7 +123,7 @@ BEGIN
   WHERE dt.user_id = p_user_id AND dt.is_active;
 
   PERFORM net.http_post(
-    url := 'https://vvkulhfjtznozgxiqluj.supabase.co/functions/v1/send-push-notification',
+    url := 'https://exizrhlkxoqljiypzwyx.supabase.co/functions/v1/send-push-notification',
     headers := jsonb_build_object('Content-Type', 'application/json'),
     body := jsonb_build_object('notification_id', v_notification_id)
   );
@@ -177,7 +177,7 @@ BEGIN
     WHERE notification_id = p_notification_id AND status = 'pending'
   ) THEN
     PERFORM net.http_post(
-      url := 'https://vvkulhfjtznozgxiqluj.supabase.co/functions/v1/send-push-notification',
+      url := 'https://exizrhlkxoqljiypzwyx.supabase.co/functions/v1/send-push-notification',
       headers := jsonb_build_object('Content-Type', 'application/json'),
       body := jsonb_build_object('notification_id', p_notification_id)
     );
