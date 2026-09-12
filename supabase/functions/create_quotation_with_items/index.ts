@@ -77,6 +77,10 @@ serve(async (req) => {
       items,
       notes,
       insurance_company_id,
+      // Both were read off the form and then dropped on the floor here: the RPC call below never
+      // named them, so an order came out with no delivery address and always 'purchase'.
+      customer_address_id,
+      request_kind,
     } = body;
 
     // Get region_id for branch using RPC
@@ -172,6 +176,8 @@ serve(async (req) => {
         p_insurance_company_id: insurance_company_id ?? null,
         p_order_number: typeof order_number === 'string' ? order_number.trim() || null : null,
         p_notes: notes ?? null,
+        p_request_kind: request_kind ?? 'purchase',
+        p_customer_address_id: customer_address_id ?? null,
       });
 
     if (createErr) {
