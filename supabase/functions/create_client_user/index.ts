@@ -40,6 +40,12 @@ type Body = {
    * ticking branches by hand.
    */
   company_id?: number;
+  /**
+   * The role to give them. Checked against the assignable set, which is the permissions module's
+   * own list plus Company Admin. Omitted, the role is derived from the shape of the account as it
+   * always was — Client Admin for a workshop user, Branch Manager for a branch one.
+   */
+  role_id?: number;
   /** Branches this user manages: orders raised there are assigned to them. */
   manager_branch_ids?: number[];
   /** Branches they may see without managing. Ignored when they are a workshop user. */
@@ -117,6 +123,7 @@ serve(async (req) => {
     const companyId = body.company_id ? Number(body.company_id) : null;
     const isWorkshopUser = body.is_workshop_user === true;
     const wantsCompanyAdmin = body.is_company_admin === true;
+    const explicitRoleId = body.role_id ? Number(body.role_id) : null;
     const managerBranchIds = Array.isArray(body.manager_branch_ids) ? body.manager_branch_ids.map(Number) : [];
     const plainBranchIds = Array.isArray(body.branch_ids) ? body.branch_ids.map(Number) : [];
 
@@ -140,6 +147,18 @@ serve(async (req) => {
     }
     if (wantsCompanyAdmin && ROLE_COMPANY_ADMIN === null) {
       return json({ status: "fail", message: "The Company Admin role is missing from this environment" }, 500);
+    }
+    if (explicitRoleId !== null) {
+      // The same list the permissions screen offers, resolved by the database rather than trusted
+      // from the browser: a role id posted here would otherwise be a way to mint a Qparts Admin.
+      const { data: roles, error: rolesError } = await admin.rpc('admin_assignable_roles');
+      if (rolesError) {
+        return json({ status: "fail", message: `Could not read the roles: ${rolesError.message}` }, 500);
+      }
+      const allowed = ((roles as any)?.data ?? []) as Array<{ role_id: number }>;
+      if (!allowed.some((r) => Number(r.role_id) === explicitRoleId)) {
+        return json({ status: "fail", message: "That role cannot be assigned" }, 400);
+      }
     }
     if (password.length < 6) {
       return json({ status: "fail", message: "Password must be at least 6 characters" }, 400);
@@ -184,7 +203,7 @@ serve(async (req) => {
           user_name: userName,
           email,
           user_type: INTERNAL_USER_TYPE,
-          user_role: wantsCompanyAdmin ? ROLE_COMPANY_ADMIN : ROLE_INTERNAL_BRANCH_USER,
+          user_role: explicitRoleId ?? (wantsCompanyAdmin ? ROLE_COMPANY_ADMIN : ROLE_INTERNAL_BRANCH_USER),
           user_company: companyId,
         });
       if (profileError) {
@@ -287,7 +306,7 @@ serve(async (req) => {
         user_name: userName,
         email,
         user_type: CLIENT_USER_TYPE,
-        user_role: isWorkshopUser ? ROLE_CLIENT_ADMIN : ROLE_BRANCH_MANAGER,
+        user_role: explicitRoleId ?? (isWorkshopUser ? ROLE_CLIENT_ADMIN : ROLE_BRANCH_MANAGER),
         user_company: workshop.company_id,
       });
     if (profileError) {
