@@ -195,6 +195,15 @@ serve(async (req) => {
       }
       const newUserId = created.user.id;
 
+      // The role decides the kind of account. Internal Branch User and Company Admin are Qparts-side
+      // logins narrowed to a company; Client Admin, Service Advisor and Branch Manager are the
+      // company's own people. Creating the second as user_type 185 would put the buying desk's menu
+      // in front of a workshop's service advisor.
+      const roleIsInternal =
+        explicitRoleId === null
+        || explicitRoleId === ROLE_INTERNAL_BRANCH_USER
+        || (ROLE_COMPANY_ADMIN !== null && explicitRoleId === ROLE_COMPANY_ADMIN);
+
       const { error: profileError } = await admin
         .schema("qvm_new_apps")
         .from("user_data")
@@ -202,7 +211,7 @@ serve(async (req) => {
           user_id: newUserId,
           user_name: userName,
           email,
-          user_type: INTERNAL_USER_TYPE,
+          user_type: roleIsInternal ? INTERNAL_USER_TYPE : CLIENT_USER_TYPE,
           user_role: explicitRoleId ?? (wantsCompanyAdmin ? ROLE_COMPANY_ADMIN : ROLE_INTERNAL_BRANCH_USER),
           user_company: companyId,
         });
