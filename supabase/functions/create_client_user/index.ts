@@ -121,6 +121,7 @@ serve(async (req) => {
     const userName = String(body.user_name || "").trim();
     const workshopId = body.workshop_id ? Number(body.workshop_id) : null;
     const companyId = body.company_id ? Number(body.company_id) : null;
+    const endCustomerId = body.end_customer_id ? Number(body.end_customer_id) : null;
     const isWorkshopUser = body.is_workshop_user === true;
     const wantsCompanyAdmin = body.is_company_admin === true;
     const explicitRoleId = body.role_id ? Number(body.role_id) : null;
@@ -130,8 +131,8 @@ serve(async (req) => {
     if (!email || !password || !userName) {
       return json({ status: "fail", message: "email, password and user_name are required" }, 400);
     }
-    if (!workshopId && !companyId) {
-      return json({ status: "fail", message: "Either workshop_id or company_id is required" }, 400);
+    if (!workshopId && !companyId && !endCustomerId) {
+      return json({ status: "fail", message: "Give a workshop, a company, or a customer" }, 400);
     }
     if (workshopId && companyId) {
       return json({
@@ -168,6 +169,99 @@ serve(async (req) => {
         status: "fail",
         message: "A user who is not a workshop user needs at least one branch",
       }, 400);
+    }
+
+    // ---------------------------------------------------------------- a customer's own login
+    if (endCustomerId) {
+      const { data: customer, error: customerError } = await admin
+        .schema("qvm_new_apps")
+        .from("end_customers")
+        .select("end_customer_id")
+        .eq("end_customer_id", endCustomerId)
+        .maybeSingle();
+      if (customerError) {
+        return json({ status: "fail", message: `Could not read the customer: ${customerError.message}` }, 500);
+      }
+      if (!customer) return json({ status: "fail", message: `Customer ${endCustomerId} not found` }, 404);
+
+      // Who owns this customer, and does the caller administer any of them? can_admin_end_customer
+      // answers this in SQL, but it asks auth.uid() — which is nobody on a service-role connection —
+      // so the walk is done here, where the caller's real identity is known.
+      if (callerIsCompanyAdmin) {
+        const { data: owners, error: ownersError } = await admin
+          .schema("qvm_new_apps")
+          .from("end_customer_owners")
+          .select("workshop_id, vendor_id")
+          .eq("end_customer_id", endCustomerId);
+        if (ownersError) {
+          return json({ status: "fail", message: `Could not read the customer's owners: ${ownersError.message}` }, 500);
+        }
+        const workshopIds = (owners ?? []).map((o) => o.workshop_id).filter(Boolean);
+        const vendorIds = (owners ?? []).map((o) => o.vendor_id).filter(Boolean);
+
+        const reached: number[] = [];
+        if (workshopIds.length) {
+          const { data } = await admin.schema("qvm_new_apps").from("workshop_companies")
+            .select("company_id").in("workshop_id", workshopIds);
+          reached.push(...(data ?? []).map((r) => Number(r.company_id)));
+        }
+        if (vendorIds.length) {
+          const { data } = await admin.schema("qvm_new_apps").from("vendor_companies")
+            .select("company_id").in("vendor_id", vendorIds);
+          reached.push(...(data ?? []).map((r) => Number(r.company_id)));
+        }
+        if (!reached.some((c) => callerCompanies.includes(c))) {
+          return json({ status: "fail", message: "Access denied: this customer is not yours to administer" }, 403);
+        }
+      }
+
+      const { data: roleId, error: roleError } = await admin
+        .schema("qvm_new_apps")
+        .rpc("customer_role_id", { p_admin: explicitRoleId === null });
+      if (roleError || !roleId) {
+        return json({ status: "fail", message: "The Customer roles are missing from this environment" }, 500);
+      }
+
+      const { data: created, error: createError } = await admin.auth.admin.createUser({
+        email, password, email_confirm: true, user_metadata: { user_name: userName },
+      });
+      if (createError || !created?.user) {
+        return json({ status: "fail", message: createError?.message || "Could not create the login" }, 400);
+      }
+      const newUserId = created.user.id;
+
+      const { error: profileError } = await admin
+        .schema("qvm_new_apps")
+        .from("user_data")
+        .insert({
+          user_id: newUserId,
+          user_name: userName,
+          email,
+          user_type: CLIENT_USER_TYPE,
+          user_role: explicitRoleId ?? Number(roleId),
+        });
+      if (profileError) {
+        await admin.auth.admin.deleteUser(newUserId);
+        return json({ status: "fail", message: profileError.message }, 500);
+      }
+
+      const { error: linkError } = await admin
+        .schema("qvm_new_apps")
+        .from("end_customer_users")
+        .insert({ user_id: newUserId, end_customer_id: endCustomerId, created_by: callerAuth.user.id });
+      if (linkError) {
+        return json({
+          status: "fail",
+          message: `The login was created but not attached to the customer: ${linkError.message}`,
+          user_id: newUserId,
+        }, 500);
+      }
+
+      return json({
+        status: "success",
+        user_id: newUserId,
+        message: "Customer login created",
+      });
     }
 
     // ---------------------------------------------------------------- company-level user
