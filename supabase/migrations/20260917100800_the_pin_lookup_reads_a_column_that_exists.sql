@@ -11,10 +11,16 @@
 -- same hole, and the function measures against the table it filters on so the two cannot disagree
 -- again.
 
+-- Appended, not inserted. CREATE OR REPLACE VIEW may only add columns at the end: putting the two
+-- new ones before `name` reads to Postgres as renaming the sixth column, and it refuses —
+--
+--   42P16  cannot change name of view column "name" to "location_lat"
+--
+-- so the centre goes last, where it can be added without disturbing the order anything else reads.
 CREATE OR REPLACE VIEW qvm_new_apps.v_districts AS
 SELECT d.district_id, d.city_id, d.external_id, d.is_active, d.sort_order,
-       d.location_lat, d.location_lng,
-       t.name, t.language_id AS name_language_id
+       t.name, t.language_id AS name_language_id,
+       d.location_lat, d.location_lng
 FROM qvm_new_apps.districts d
 LEFT JOIN LATERAL (
   SELECT t.* FROM qvm_new_apps.districts_descriptions t
