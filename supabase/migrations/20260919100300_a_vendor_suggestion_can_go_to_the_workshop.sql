@@ -43,12 +43,16 @@ END
 $drop$;
 
 -- Who counts as "the workshop" for an order: the people at the company that raised it, narrowed to
--- the branch when the order names one. Client-side users only — an internal user reading their own
--- company's orders is not the customer being asked.
--- SETOF uuid rather than RETURNS TABLE (user_id uuid). A named output column is in scope inside a
--- SQL function body, and this body selects user_data.user_id — the same name — which is exactly the
--- shape that makes a reference ambiguous. An unnamed scalar set cannot collide with anything, and
--- the callers only ever want the ids.
+-- the branch the order's lines were raised for when the reader is pinned to one branch. Client-side
+-- users only (183) — an internal user reading their own company's orders is not the customer.
+--
+-- A quotation has no branch of its own. It carries company_id and nothing else; the branch lives on
+-- each LINE, as quotation_items.customer_id, which is a client_branches row and is exactly what
+-- user_data.user_branch is matched against elsewhere. Reading a q.branch_id that does not exist is
+-- what stopped this file's first three deploys.
+--
+-- SETOF uuid rather than a named output column, which would share its name with the column the body
+-- selects; the callers only ever want the ids.
 CREATE OR REPLACE FUNCTION qvm_new_apps.workshop_users_for_quotation(p_quotation_id bigint)
  RETURNS SETOF uuid
  LANGUAGE sql
@@ -56,13 +60,18 @@ CREATE OR REPLACE FUNCTION qvm_new_apps.workshop_users_for_quotation(p_quotation
  SECURITY DEFINER
  SET search_path TO 'qvm_new_apps', 'public'
 AS $function$
-  SELECT ud.user_id
+  SELECT DISTINCT ud.user_id
     FROM qvm_new_apps.quotations q
-    JOIN qvm_new_apps.user_data ud
-      ON ud.user_company = q.company_id
-     AND (q.branch_id IS NULL OR ud.user_branch IS NULL OR ud.user_branch = q.branch_id)
+    JOIN qvm_new_apps.user_data ud ON ud.user_company = q.company_id
    WHERE q.quotation_id = p_quotation_id
-     AND ud.user_type = 183;
+     AND ud.user_type = 183
+     AND ud.deleted_at IS NULL
+     -- A user with no branch of their own speaks for the whole company; one pinned to a branch only
+     -- hears about orders that branch actually raised a line on.
+     AND (ud.user_branch IS NULL
+          OR EXISTS (SELECT 1 FROM qvm_new_apps.quotation_items qi
+                      WHERE qi.quotation_id = q.quotation_id
+                        AND qi.customer_id = ud.user_branch));
 $function$;
 
 REVOKE ALL ON FUNCTION qvm_new_apps.workshop_users_for_quotation(bigint) FROM PUBLIC;
