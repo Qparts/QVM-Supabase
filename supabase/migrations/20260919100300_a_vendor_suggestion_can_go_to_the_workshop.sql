@@ -45,8 +45,12 @@ $drop$;
 -- Who counts as "the workshop" for an order: the people at the company that raised it, narrowed to
 -- the branch when the order names one. Client-side users only — an internal user reading their own
 -- company's orders is not the customer being asked.
+-- SETOF uuid rather than RETURNS TABLE (user_id uuid). A named output column is in scope inside a
+-- SQL function body, and this body selects user_data.user_id — the same name — which is exactly the
+-- shape that makes a reference ambiguous. An unnamed scalar set cannot collide with anything, and
+-- the callers only ever want the ids.
 CREATE OR REPLACE FUNCTION qvm_new_apps.workshop_users_for_quotation(p_quotation_id bigint)
- RETURNS TABLE (user_id uuid)
+ RETURNS SETOF uuid
  LANGUAGE sql
  STABLE
  SECURITY DEFINER
@@ -107,8 +111,8 @@ BEGIN
     SELECT 'قطعة مقترحة بانتظار موافقتك',
            'أضاف المورّد القطعة ' || COALESCE(v_part, '') || ' إلى الطلب ' || COALESCE(v_order, ''),
            jsonb_build_object('quotation_id', v_qid, 'quotation_item_id', p_quotation_item_id),
-           'user', w.user_id, auth.uid()
-      FROM qvm_new_apps.workshop_users_for_quotation(v_qid) w
+           'user', w, auth.uid()
+      FROM qvm_new_apps.workshop_users_for_quotation(v_qid) AS w
     RETURNING id, target_user_id
   )
   INSERT INTO qvm_new_apps.notification_reads (notification_id, user_id)
@@ -153,8 +157,7 @@ BEGIN
   END IF;
 
   -- The workshop the part was sent to, or the Qparts team acting for them when they ask by phone.
-  IF NOT (EXISTS (SELECT 1 FROM qvm_new_apps.workshop_users_for_quotation(v_qid) w
-                   WHERE w.user_id = auth.uid())
+  IF NOT (auth.uid() IN (SELECT qvm_new_apps.workshop_users_for_quotation(v_qid))
           OR qvm_new_apps.is_qparts_team()) THEN
     RAISE EXCEPTION 'This part was not sent to you';
   END IF;

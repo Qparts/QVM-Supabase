@@ -385,8 +385,7 @@ DECLARE
   v_round bigint;
 BEGIN
   IF NOT (qvm_new_apps.is_qparts_team()
-          OR EXISTS (SELECT 1 FROM qvm_new_apps.workshop_users_for_quotation(p_quotation_id) w
-                      WHERE w.user_id = auth.uid())) THEN
+          OR auth.uid() IN (SELECT qvm_new_apps.workshop_users_for_quotation(p_quotation_id))) THEN
     RAISE EXCEPTION 'Not allowed to record an approval for this order';
   END IF;
 
