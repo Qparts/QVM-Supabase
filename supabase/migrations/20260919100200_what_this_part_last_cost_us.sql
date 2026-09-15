@@ -53,13 +53,19 @@ AS $function$
     SELECT upper(btrim(qi.part_number))                        AS key,
            COALESCE(pi.final_purchase_price, qvi.cost)         AS price,
            po.created_at                                       AS bought_at,
-           po.order_number                                     AS order_number,
+           -- The order number is the QUOTATION's. purchase_orders does not carry one: it hangs off
+           -- confirmed_order_id, and the human-readable number lives on the order the parts came
+           -- from. Reading po.order_number is what broke this file's first two deploys.
+           q.order_number                                      AS order_number,
            v.vendor_name                                       AS vendor_name
       FROM qvm_new_apps.purchase_items pi
       JOIN qvm_new_apps.purchase_orders po      ON po.purchase_order_id = pi.purchase_order_id
       JOIN qvm_new_apps.quotation_vendor_items qvi ON qvi.cost_id = pi.cost_id
       JOIN qvm_new_apps.quotation_items qi      ON qi.quotation_item_id = qvi.quotation_item_id
-      LEFT JOIN qvm_new_apps.vendors v          ON v.vendor_id = qvi.vendor_id
+      JOIN qvm_new_apps.quotations q            ON q.quotation_id = qi.quotation_id
+      -- The PO's own vendor when it has one; the quoted line's vendor otherwise. They are the same
+      -- vendor in every ordinary case, but the PO is the document that actually bought the part.
+      LEFT JOIN qvm_new_apps.vendors v          ON v.vendor_id = COALESCE(po.vendor_id, qvi.vendor_id)
       JOIN wanted w ON w.key = upper(btrim(qi.part_number))
      WHERE COALESCE(pi.final_purchase_price, qvi.cost) IS NOT NULL
        AND COALESCE(pi.final_purchase_price, qvi.cost) > 0
