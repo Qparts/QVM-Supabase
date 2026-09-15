@@ -16,6 +16,32 @@ SELECT 3, 'Pending Workshop Approval'
 WHERE NOT EXISTS (
   SELECT 1 FROM qvm_new_apps.list_data WHERE list_id = 3 AND list_data = 'Pending Workshop Approval');
 
+-- Clear the way first.
+--
+-- CREATE OR REPLACE cannot change a function's return type or its argument names, and this project
+-- is full of functions that exist only in the live database and in no migration — get_brand_classes
+-- and get_parts_pricing_history are both like that. If one of the names below is already taken by
+-- such a function with a different shape, the CREATE fails and takes the whole deploy with it,
+-- which is what happened the first time this file went out.
+--
+-- Dropping every overload by name rather than by signature, because a signature-specific DROP
+-- misses exactly the case that causes the failure. None of these names is referenced anywhere in
+-- this repository, so nothing here can be pulling the rug from under a caller.
+DO $drop$
+DECLARE r record;
+BEGIN
+  FOR r IN SELECT p.oid::regprocedure AS sig
+             FROM pg_proc p
+             JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname IN ('public', 'qvm_new_apps')
+              AND p.proname IN ('workshop_users_for_quotation', 'send_added_item_to_workshop',
+                                 'workshop_decide_added_item', 'list_suggested_items')
+  LOOP
+    EXECUTE 'DROP FUNCTION IF EXISTS ' || r.sig || ' CASCADE';
+  END LOOP;
+END
+$drop$;
+
 -- Who counts as "the workshop" for an order: the people at the company that raised it, narrowed to
 -- the branch when the order names one. Client-side users only — an internal user reading their own
 -- company's orders is not the customer being asked.

@@ -12,6 +12,31 @@
 -- invoice lands: a purchase order raised last week has been bought at a price even though nobody
 -- has typed the final figure yet, and ignoring it would make the most recent purchase invisible.
 
+-- Clear the way first.
+--
+-- CREATE OR REPLACE cannot change a function's return type or its argument names, and this project
+-- is full of functions that exist only in the live database and in no migration — get_brand_classes
+-- and get_parts_pricing_history are both like that. If one of the names below is already taken by
+-- such a function with a different shape, the CREATE fails and takes the whole deploy with it,
+-- which is what happened the first time this file went out.
+--
+-- Dropping every overload by name rather than by signature, because a signature-specific DROP
+-- misses exactly the case that causes the failure. None of these names is referenced anywhere in
+-- this repository, so nothing here can be pulling the rug from under a caller.
+DO $drop$
+DECLARE r record;
+BEGIN
+  FOR r IN SELECT p.oid::regprocedure AS sig
+             FROM pg_proc p
+             JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname IN ('public', 'qvm_new_apps')
+              AND p.proname IN ('last_purchase_prices')
+  LOOP
+    EXECUTE 'DROP FUNCTION IF EXISTS ' || r.sig || ' CASCADE';
+  END LOOP;
+END
+$drop$;
+
 CREATE OR REPLACE FUNCTION qvm_new_apps.last_purchase_prices(p_part_numbers text[])
  RETURNS jsonb
  LANGUAGE sql
