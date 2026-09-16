@@ -1,0 +1,11 @@
+-- The pricing page may read the alternatives.
+--
+-- get_quotation_vendor_pricings and create_purchase_orders_anditems both run as the CALLER, not as
+-- their owner, and both now read quotation_vendor_item_alternatives — which was created with a
+-- grant for service_role and nobody else, because every other reader of it is SECURITY DEFINER.
+-- Result: "permission denied for table quotation_vendor_item_alternatives" the moment the pricing
+-- page loaded. This is 20260911190000's lesson exactly: a table added later has no grants until
+-- someone writes them, and a read inside an invoker function is checked against the person.
+--
+-- SELECT only. Writing an alternative goes through the gated functions and stays that way.
+GRANT SELECT ON qvm_new_apps.quotation_vendor_item_alternatives TO authenticated;
