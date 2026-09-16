@@ -77,6 +77,7 @@ serve(async (req) => {
       items,
       notes,
       insurance_company_id,
+      end_customer_id,
       // Both were read off the form and then dropped on the floor here: the RPC call below never
       // named them, so an order came out with no delivery address and always 'purchase'.
       customer_address_id,
@@ -178,6 +179,8 @@ serve(async (req) => {
         p_notes: notes ?? null,
         p_request_kind: request_kind ?? 'purchase',
         p_customer_address_id: customer_address_id ?? null,
+        // The end customer chosen on the form — one of the workshop's own list.
+        p_end_customer_id: end_customer_id ?? null,
       });
 
     if (createErr) {
