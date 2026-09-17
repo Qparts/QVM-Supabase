@@ -72,20 +72,21 @@ AS $function$
             FROM qvm_new_apps.quotation_approval_items ai
             JOIN qvm_new_apps.quotation_approval_rounds ar ON ar.approval_round_id = ai.approval_round_id
            WHERE ai.quotation_item_id = qi.quotation_item_id
-             AND ap_quotation_id = p_quotation_id
-             AND ap_audience = p_audience
+             AND ar.quotation_id = p_quotation_id
+             AND ar.audience = p_audience
            ORDER BY ai.approval_round_id DESC
            LIMIT 1
         ) li ON true
         LEFT JOIN qvm_new_apps.quotation_approval_rounds lr ON lr.approval_round_id = li.approval_round_id
         LEFT JOIN qvm_new_apps.quotation_vendor_items qvi ON qvi.cost_id = li.cost_id
-        -- For a line never sent: the offer it would be priced from today.
+        -- For a line never sent: the offer it would be priced from today — the pricing team's pick
+        -- when they made one, otherwise the cheapest, the same order the senders use.
         LEFT JOIN LATERAL (
           SELECT v.cost_id, v.cost, v.agency_price, v.sla, v.chosen_alternative_id
             FROM qvm_new_apps.quotation_vendor_items v
            WHERE v.quotation_item_id = qi.quotation_item_id
              AND v.cost IS NOT NULL AND v.cost > 0
-           ORDER BY v.best_cost DESC, v.cost ASC
+           ORDER BY (v.cost_id = qi.selected_cost_id) DESC NULLS LAST, v.best_cost DESC, v.cost ASC
            LIMIT 1
         ) bq ON true
         LEFT JOIN qvm_new_apps.quotation_vendor_item_alternatives bch ON bch.alternative_id = bq.chosen_alternative_id
@@ -208,3 +209,9 @@ BEGIN
                              ORDER BY c.approval_round_id DESC LIMIT 1));
 END;
 $function$;
+
+-- A marker the client can read without a session, so "did this file land" is answerable from the
+-- REST API rather than from the branch log.
+CREATE OR REPLACE FUNCTION public.approval_flow_version()
+ RETURNS integer LANGUAGE sql STABLE AS $$ SELECT 2 $$;
+GRANT EXECUTE ON FUNCTION public.approval_flow_version() TO anon, authenticated;
