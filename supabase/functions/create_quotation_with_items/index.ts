@@ -84,27 +84,13 @@ serve(async (req) => {
       request_kind,
     } = body;
 
-    // Get region_id for branch using RPC
-    const { data: regionData, error: regionErr } = await supabase
+    // The branch's region, when it has one. It only ever chose the order-number sequence, and the
+    // RPC now numbers an order without one — so a branch with no region is not a refused order.
+    const { data: regionData } = await supabase
       .rpc('get_region_for_branch', { p_customer_id: customer_id });
+    const region_id = regionData ?? null;
 
-    if (regionErr || !regionData) {
-      return new Response(JSON.stringify({
-        status: false,
-        message: 'Region not found for this branch',
-        data: null
-      }), {
-        status: 400,
-        headers: {
-          "Content-Type": "application/json",
-          ...corsHeaders
-        }
-      });
-    }
-
-    const region_id = regionData;
-
-    if (!client_id || !customer_id || !region_id || !order_type || !delivery_type) {
+    if (!client_id || !customer_id || !order_type || !delivery_type) {
       return new Response(JSON.stringify({
         status: false, 
         message: "Missing required fields", 
