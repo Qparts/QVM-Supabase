@@ -444,6 +444,10 @@ verify_jwt = false
 enabled = true
 verify_jwt = false
 
+[functions.update_client_user]
+enabled = true
+verify_jwt = false
+
 [functions.create_quotation_with_items]
 enabled = true
 verify_jwt = false
