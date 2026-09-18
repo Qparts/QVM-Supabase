@@ -115,7 +115,7 @@ begin
                   (d->>'signed_total')::numeric as amt
              from jsonb_array_elements(v_rows) d
   loop
-    -- The unique index refuses a document already in an open request; say which one.
+    -- The unique index refuses a document that is already in an open request; say which.
     begin
       insert into qvm_new_apps.vendor_settlement_items (settlement_id, doc_kind, doc_id, amount)
       values (v_id, r.k, r.i, r.amt);
