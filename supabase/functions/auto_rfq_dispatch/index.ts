@@ -57,8 +57,10 @@ Deno.serve(async (req) => {
       if (auth.startsWith("Bearer ")) {
         const { data: u } = await admin.auth.getUser(auth.slice(7));
         if (u?.user) {
-          const { data: isAdmin } = await db.rpc("is_qparts_admin", { p_user_id: u.user.id });
-          allowed = isAdmin === true;
+          // A Qparts Admin: internal user type with the admin role — read directly, since the SQL
+          // gate keys on auth.uid(), which is nobody on a service-role connection.
+          const { data: row } = await db.from("user_data").select("user_type, user_role").eq("user_id", u.user.id).maybeSingle();
+          allowed = Number(row?.user_type) === 185 && Number(row?.user_role) === 172;
         }
       }
     }

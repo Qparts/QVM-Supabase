@@ -88,13 +88,13 @@ EXCEPTION WHEN OTHERS THEN
   RAISE NOTICE 'auto_rfq: vault secret not created: %', SQLERRM;
 END $$;
 
--- Seed the default brands from the free-text list the dashboard already holds, where a name matches
--- a car brand exactly; nobody starts from a blank sheet.
+-- Seed the default brands from what the vendors' branches already declare (vendor_branches.brands,
+-- car-brand ids), so nobody starts from a blank sheet. Only ids that are car brands are taken.
 INSERT INTO qvm_new_apps.vendor_default_brands (vendor_id, brand_id)
-SELECT DISTINCT v.vendor_id, ld.list_data_id
-  FROM qvm_new_apps.vendors v
-  CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(v.brands, '[]'::jsonb)) b(name)
-  JOIN qvm_new_apps.list_data ld ON ld.list_id = 4 AND lower(btrim(ld.list_data)) = lower(btrim(b.name))
+SELECT DISTINCT vb.vendor_id, ld.list_data_id
+  FROM qvm_new_apps.vendor_branches vb
+  CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(vb.brands, '[]'::jsonb)) b(id)
+  JOIN qvm_new_apps.list_data ld ON ld.list_id = 4 AND b.id ~ '^[0-9]+$' AND ld.list_data_id = b.id::integer
 ON CONFLICT DO NOTHING;
 
 ------------------------------------------------------------------------------ helpers
@@ -102,7 +102,7 @@ CREATE OR REPLACE FUNCTION qvm_new_apps.auto_rfq_assert_admin()
  RETURNS void LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path TO 'qvm_new_apps', 'public'
 AS $$
 BEGIN
-  IF NOT qvm_new_apps.is_qparts_admin(auth.uid()) THEN
+  IF NOT qvm_new_apps.is_qparts_admin() THEN
     RAISE EXCEPTION 'Access denied: Qparts Admin only';
   END IF;
 END $$;
@@ -120,11 +120,11 @@ BEGIN
   PERFORM qvm_new_apps.auto_rfq_assert_admin();
   RETURN jsonb_build_object(
     'branches', COALESCE((
-      SELECT jsonb_agg(jsonb_build_object('customer_id', vb.customer_id, 'name', vb.name,
-                                          'company_name', cn.list_data, 'city', vb.city)
-                       ORDER BY cn.list_data NULLS LAST, vb.name)
-        FROM qvm_new_apps.v_client_branches vb
-        LEFT JOIN qvm_new_apps.list_data cn ON cn.list_data_id = vb.company_id), '[]'::jsonb),
+      SELECT jsonb_agg(jsonb_build_object('customer_id', cb.customer_id, 'name', cb.branch_name,
+                                          'company_name', cn.list_data, 'city', cb.city)
+                       ORDER BY cn.list_data NULLS LAST, cb.branch_name)
+        FROM qvm_new_apps.client_branches cb
+        LEFT JOIN qvm_new_apps.list_data cn ON cn.list_data_id = cb.list_data_id), '[]'::jsonb),
     'brands', COALESCE((
       SELECT jsonb_agg(jsonb_build_object('brand_id', ld.list_data_id, 'name', ld.list_data) ORDER BY ld.list_data)
         FROM qvm_new_apps.list_data ld WHERE ld.list_id = 4), '[]'::jsonb),
@@ -155,7 +155,7 @@ BEGIN
       SELECT jsonb_agg(jsonb_build_object(
                'rule_id', r.rule_id,
                'customer_id', r.customer_id,
-               'branch_name', vb.name,
+               'branch_name', cb.branch_name,
                'company_name', cn.list_data,
                'brand_id', r.brand_id,
                'brand_name', br.list_data,
@@ -181,10 +181,10 @@ BEGIN
                    LEFT JOIN qvm_new_apps.vendors v ON v.vendor_id = rv.vendor_id
                    LEFT JOIN qvm_new_apps.vendor_branches vbr ON vbr.vendor_branch_id = rv.vendor_branch_id
                   WHERE rv.rule_id = r.rule_id), '[]'::jsonb))
-             ORDER BY cn.list_data NULLS LAST, vb.name, br.list_data)
+             ORDER BY cn.list_data NULLS LAST, cb.branch_name, br.list_data)
         FROM qvm_new_apps.auto_rfq_rules r
-        LEFT JOIN qvm_new_apps.v_client_branches vb ON vb.customer_id = r.customer_id
-        LEFT JOIN qvm_new_apps.list_data cn ON cn.list_data_id = vb.company_id
+        LEFT JOIN qvm_new_apps.client_branches cb ON cb.customer_id = r.customer_id
+        LEFT JOIN qvm_new_apps.list_data cn ON cn.list_data_id = cb.list_data_id
         LEFT JOIN qvm_new_apps.list_data br ON br.list_data_id = r.brand_id), '[]'::jsonb));
 END $$;
 
