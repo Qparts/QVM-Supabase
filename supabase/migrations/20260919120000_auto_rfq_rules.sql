@@ -496,6 +496,23 @@ CREATE TRIGGER trg_auto_rfq_on_item_status
 AFTER INSERT OR UPDATE OF item_status ON qvm_new_apps.quotation_items
 FOR EACH ROW EXECUTE FUNCTION qvm_new_apps.auto_rfq_on_item_status();
 
+------------------------------------------------------------------------------ the send's cancelled-line check, as the send function expects it
+-- Written in 20260910100000 but never applied on test (the branch's runner has failed since March);
+-- the send function below calls it, so it is (re)created here — dependency-free, idempotent.
+CREATE OR REPLACE FUNCTION qvm_new_apps.assert_items_sendable(p_quotation_items jsonb)
+ RETURNS text
+ LANGUAGE sql
+ STABLE
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+  SELECT string_agg(DISTINCT COALESCE(qi.part_number, qi.part_description, qi.quotation_item_id::text), ', ')
+  FROM jsonb_array_elements(p_quotation_items) e
+  JOIN qvm_new_apps.quotation_items qi
+    ON qi.quotation_item_id = NULLIF(e->>'quotation_item_id','')::bigint
+  WHERE qi.item_status = 18;   -- Canceled
+$function$;
+
 ------------------------------------------------------------------------------ a send adds to a vendor's lines, never replaces them
 CREATE OR REPLACE FUNCTION qvm_new_apps.create_vendors_quotations(p_vendor_selections jsonb, p_quotation_id bigint, p_quotation_items jsonb)
  RETURNS jsonb
