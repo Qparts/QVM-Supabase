@@ -564,6 +564,11 @@ verify_jwt = true
 enabled = true
 verify_jwt = true
 
+# Woken by a database trigger carrying a shared secret, not a user JWT; it verifies the secret itself.
+[functions.auto_rfq_dispatch]
+enabled = true
+verify_jwt = false
+
 [functions.submit_delivery_note]
 enabled = true
 verify_jwt = true
