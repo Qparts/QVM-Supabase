@@ -38,22 +38,36 @@ CREATE TRIGGER trg_quotation_items_inherit_order_context
 BEFORE INSERT ON qvm_new_apps.quotation_items
 FOR EACH ROW EXECUTE FUNCTION qvm_new_apps.quotation_items_inherit_order_context();
 
--- Lines added before this, still missing what their siblings know. One representative line per
--- order (a line with a VIN first), joined back — the update target cannot be read inside a lateral.
-UPDATE qvm_new_apps.quotation_items qi
-   SET customer_id = COALESCE(qi.customer_id, s.customer_id),
-       vin         = COALESCE(qi.vin,         s.vin),
-       main_brand  = COALESCE(qi.main_brand,  s.main_brand),
-       model       = COALESCE(qi.model,       s.model),
-       year        = COALESCE(qi.year,        s.year)
-  FROM (
-    SELECT DISTINCT ON (o.quotation_id) o.quotation_id, o.customer_id, o.vin, o.main_brand, o.model, o.year
-      FROM qvm_new_apps.quotation_items o
-     WHERE o.customer_id IS NOT NULL OR o.vin IS NOT NULL OR o.main_brand IS NOT NULL
-     ORDER BY o.quotation_id, (o.vin IS NOT NULL) DESC, (o.main_brand IS NOT NULL) DESC, o.quotation_item_id
-  ) s
- WHERE s.quotation_id = qi.quotation_id
-   AND (qi.customer_id IS NULL OR qi.vin IS NULL OR qi.main_brand IS NULL OR qi.model IS NULL OR qi.year IS NULL);
+-- Lines added before this, still missing the branch or the make — the two fields everything keys on
+-- — and added after the order's first line (the ones that arrived through an add path). The
+-- price-to-sheet trigger fires on every row update and posts for each Priced row; it is held back
+-- for this one statement so a backfill does not become a hundred sheet writes.
+DO $$
+BEGIN
+  BEGIN
+    ALTER TABLE qvm_new_apps.quotation_items DISABLE TRIGGER trg_write_price_to_sheet_on_priced;
+  EXCEPTION WHEN undefined_object THEN NULL; END;
+
+  UPDATE qvm_new_apps.quotation_items qi
+     SET customer_id = COALESCE(qi.customer_id, s.customer_id),
+         vin         = COALESCE(qi.vin,         s.vin),
+         main_brand  = COALESCE(qi.main_brand,  s.main_brand),
+         model       = COALESCE(qi.model,       s.model),
+         year        = COALESCE(qi.year,        s.year)
+    FROM (
+      SELECT DISTINCT ON (o.quotation_id) o.quotation_id, o.customer_id, o.vin, o.main_brand, o.model, o.year, o.created_at AS first_created_at
+        FROM qvm_new_apps.quotation_items o
+       WHERE o.customer_id IS NOT NULL OR o.main_brand IS NOT NULL
+       ORDER BY o.quotation_id, (o.vin IS NOT NULL) DESC, (o.main_brand IS NOT NULL) DESC, o.quotation_item_id
+    ) s
+   WHERE s.quotation_id = qi.quotation_id
+     AND (qi.customer_id IS NULL OR qi.main_brand IS NULL)
+     AND qi.created_at > (SELECT min(f.created_at) FROM qvm_new_apps.quotation_items f WHERE f.quotation_id = qi.quotation_id) + interval '5 minutes';
+
+  BEGIN
+    ALTER TABLE qvm_new_apps.quotation_items ENABLE TRIGGER trg_write_price_to_sheet_on_priced;
+  EXCEPTION WHEN undefined_object THEN NULL; END;
+END $$;
 
 CREATE OR REPLACE FUNCTION public.approval_flow_version()
  RETURNS integer LANGUAGE sql STABLE AS $$ SELECT 23 $$;
