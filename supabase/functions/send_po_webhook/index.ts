@@ -150,12 +150,13 @@ function poEmailHtml(payload: any, vendor: any): string {
   </div>`;
 }
 
-async function emailVendors(payload: any, conn: any, poItems: any[]): Promise<{ sent: number; failed: number; detail: string[] }> {
+async function emailVendors(payload: any, conn: any, poItems: any[]): Promise<{ sent: number; failed: number; unreachable: string[]; detail: string[] }> {
   const vendors: any[] = Array.isArray(payload?.vendor_list) ? payload.vendor_list : [];
   const detail: string[] = [];
+  const unreachable: string[] = [];
   let sent = 0;
   let failed = 0;
-  if (vendors.length === 0) return { sent, failed, detail: ["the payload names no vendor"] };
+  if (vendors.length === 0) return { sent, failed, unreachable, detail: ["the payload names no vendor"] };
 
   const token = await gmailAccessToken();
 
@@ -182,7 +183,8 @@ async function emailVendors(payload: any, conn: any, poItems: any[]): Promise<{ 
       to = await lookupVendorEmails(conn, vendorId, branchId == null ? null : Number(branchId));
     }
     if (to.length === 0) {
-      failed += 1;
+      // Nothing to deliver to is not a delivery failure: the order is saved and the caller is told.
+      unreachable.push(String(v?.vendor_name ?? "vendor"));
       detail.push(`${v?.vendor_name ?? "vendor"}: no email address on file for the vendor or any of its users`);
       continue;
     }
@@ -217,7 +219,7 @@ async function emailVendors(payload: any, conn: any, poItems: any[]): Promise<{ 
     }
   }
 
-  return { sent, failed, detail };
+  return { sent, failed, unreachable, detail };
 }
 
 async function logAttempt(params: {
@@ -320,10 +322,11 @@ Deno.serve(async (req) => {
       if (!webhookUrl) {
         let sent = 0;
         let failed = 0;
+        let unreachable: string[] = [];
         let detail: string[] = [];
         let emailError = "";
         try {
-          ({ sent, failed, detail } = await emailVendors(webhook_payload, conn, Array.isArray(po_items) ? po_items as any[] : []));
+          ({ sent, failed, unreachable, detail } = await emailVendors(webhook_payload, conn, Array.isArray(po_items) ? po_items as any[] : []));
         } catch (mailErr) {
           emailError = String(mailErr);
         }
@@ -337,10 +340,20 @@ Deno.serve(async (req) => {
           payload: webhook_payload,
         });
 
-        if (sent > 0) {
+        // Saved when at least one vendor was emailed, and also when nobody could be emailed only
+        // because no vendor has an address on file: there was nothing to deliver, not a failed
+        // delivery, and a vendor reached by phone still needs their purchase order to exist.
+        // Rolled back when a send was attempted and every one failed, or the sender itself is broken.
+        const nothingToDeliver = !emailError && sent === 0 && failed === 0 && unreachable.length > 0;
+        if (sent > 0 || nothingToDeliver) {
           await conn.queryArray("COMMIT");
           return new Response(
-            JSON.stringify({ status: "success", delivery: "email", emailed: sent, failed, detail, data: rpcResult }),
+            JSON.stringify({
+              status: "success", delivery: sent > 0 ? "email" : "none", emailed: sent, failed, unreachable, detail, data: rpcResult,
+              warning: unreachable.length
+                ? `Saved, but no purchase order email went to ${unreachable.join(", ")}: no email address on file for the vendor or any of its users. Notify them yourself, or add an email on the vendor's profile.`
+                : null,
+            }),
             { headers: { ...corsHeaders, "Content-Type": "application/json" } },
           );
         }
