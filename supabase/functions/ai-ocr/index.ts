@@ -9,6 +9,11 @@
 // key, and the key never leaves the server. It is a thin proxy on purpose — the request body
 // and the response are Gemini's own, unchanged, so the parsing, the schema, the usage
 // accounting and the error classification on the client all keep working exactly as they did.
+//
+// NOTE: this function is deployed with verify_jwt DISABLED, on purpose. It authenticates its
+// own callers below, and one of them — a vendor pricing a quote from an emailed link — has no
+// JWT by design. Turning platform JWT verification on rejects that caller before this file
+// runs at all.
 
 const DEFAULT_MODEL = Deno.env.get('GEMINI_MODEL') ?? 'gemini-flash-lite-latest';
 
@@ -90,6 +95,45 @@ async function quoteTokenIsLive(token: string): Promise<boolean> {
   return (await res.json().catch(() => false)) === true;
 }
 
+/**
+ * The credit gate.
+ *
+ * «If the organisation's AI credit runs out the AI must stop everywhere» is only enforceable at
+ * a place every model call goes through, and this function is that place — it holds the key.
+ * A check in the browser greys a button; this one is the rule.
+ *
+ * Asked with the caller's own JWT so the database resolves which organisation they are, rather
+ * than being told by a request body anyone can write. A magic-link vendor has no JWT, and the
+ * database has no way to bill them either, so they are not gated here — the quote token already
+ * limits them to one quotation.
+ *
+ * Fails open. If this check itself errors, the AI keeps working: a billing lookup that is down
+ * should not take OCR down with it, and the usage is still recorded either way.
+ */
+async function creditGate(req: Request): Promise<{ ok: boolean; reason?: string; balance?: number }> {
+  const auth = req.headers.get('Authorization') ?? '';
+  if (!auth.startsWith('Bearer ')) return { ok: true };
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/ai_can_run_for_me`, {
+      method: 'POST',
+      headers: {
+        Authorization: auth,
+        apikey: ANON_KEY,
+        'Content-Type': 'application/json',
+        'Content-Profile': 'qvm_new_apps',
+      },
+      body: '{}',
+    });
+    if (!res.ok) return { ok: true };
+    const payload = await res.json().catch(() => null);
+    const data = payload?.data;
+    if (!data || data.allowed !== false) return { ok: true };
+    return { ok: false, reason: String(data.reason ?? 'no_credit'), balance: data.balance };
+  } catch {
+    return { ok: true };
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
 
@@ -118,6 +162,29 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: { code: 401, message: 'unauthorized' } }), {
       status: 401, headers: { ...cors, 'Content-Type': 'application/json' },
     });
+  }
+
+  // Before the key, not after: a call that is refused must not reach the provider, because by
+  // the time it has, somebody has already been charged for it.
+  const gate = await creditGate(req);
+  if (!gate.ok) {
+    return new Response(
+      JSON.stringify({ error: {
+        code: 402,
+        status: gate.reason === 'disabled' || gate.reason === 'party_disabled'
+          ? 'AI_DISABLED' : 'AI_NO_CREDIT',
+        // Distinguished on purpose: «switched off» and «out of credit» need different people to
+        // fix them, and a single message would send everyone to the wrong one.
+        message: gate.reason === 'disabled'
+          ? 'AI is switched off for this organisation.'
+          : gate.reason === 'party_disabled'
+            ? 'AI is switched off for this account.'
+            : 'This organisation has no AI credit left.',
+        reason: gate.reason,
+        balance: gate.balance ?? null,
+      } }),
+      { status: 402, headers: { ...cors, 'Content-Type': 'application/json' } },
+    );
   }
 
   const GEMINI_KEY = await geminiKey();

@@ -1,0 +1,12 @@
+-- Drop the six-argument set_party. It writes to a table that no longer exists under that name.
+--
+-- Adding the two limit arguments with defaults did not replace the old function — `create or
+-- replace` only replaces a function with the *same* argument list, so the previous one is still
+-- there, still compiled against `ai_credit_party_switch`. PostgREST would resolve a six-argument
+-- call to it and get a missing-relation error at runtime, on a function that looks fine in the
+-- catalogue.
+--
+-- This is the same trap as the `integration_consume` signature change, and the reason that one
+-- was dropped first. It is only visible if you go and look, which is why looking is now the step
+-- after every signature change.
+drop function if exists qvm_new_apps.ai_credit_set_party(integer, integer, integer, integer, boolean, text);
