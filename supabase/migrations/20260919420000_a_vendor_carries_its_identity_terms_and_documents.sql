@@ -155,7 +155,7 @@ BEGIN
   END IF;
 
   RETURN jsonb_build_object('success', true, 'data', jsonb_build_object('vendor_id', v_id));
-END $function;
+END $function$;
 
 GRANT EXECUTE ON FUNCTION qvm_new_apps.admin_upsert_vendor(integer, jsonb, integer, text, integer[], jsonb) TO authenticated;
 CREATE OR REPLACE FUNCTION public.admin_upsert_vendor(
@@ -214,7 +214,7 @@ BEGIN
     SET name = EXCLUDED.name, updated_by = EXCLUDED.updated_by, updated_at = now();
 
   RETURN jsonb_build_object('success', true, 'data', jsonb_build_object('vendor_branch_id', v_id));
-END $function;
+END $function$;
 
 GRANT EXECUTE ON FUNCTION qvm_new_apps.admin_upsert_vendor_branch(integer, bigint, jsonb, integer, boolean, jsonb) TO authenticated;
 CREATE OR REPLACE FUNCTION public.admin_upsert_vendor_branch(
@@ -400,7 +400,7 @@ BEGIN
   )) INTO v_res;
 
   RETURN v_res;
-END $function;
+END $function$;
 
 CREATE OR REPLACE FUNCTION public.approval_flow_version()
  RETURNS integer LANGUAGE sql STABLE AS $$ SELECT 46 $$;
