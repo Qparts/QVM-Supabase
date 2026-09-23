@@ -70,7 +70,15 @@ serve(async (req) => {
 
     const isInternal = String(callerData?.user_type ?? "") === "185";
     const isAdminVendorForThisVendor = callerData?.user_vendor === target.user_vendor && callerData?.user_role === vendorAdminRoleId;
-    if (!isInternal && !isAdminVendorForThisVendor) return jsonResponse({ status: "fail", message: "Not authorized" }, 403);
+    // A Company Admin of a company this vendor sells to runs the vendor too; can_admin_vendor holds
+    // that rule in one place, so it is asked as the caller rather than re-derived here.
+    let isCompanyAdminForVendor = false;
+    if (!isInternal && !isAdminVendorForThisVendor) {
+      const asCaller = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, { global: { headers: { Authorization: `Bearer ${jwt}` } } });
+      const { data: ok } = await asCaller.schema("qvm_new_apps").rpc("can_admin_vendor", { p_vendor_id: target.user_vendor });
+      isCompanyAdminForVendor = ok === true;
+    }
+    if (!isInternal && !isAdminVendorForThisVendor && !isCompanyAdminForVendor) return jsonResponse({ status: "fail", message: "Not authorized" }, 403);
 
     const newRoleId = body.role === "vendor_admin" ? vendorAdminRoleId : body.role === "vendor" ? vendorRoleId : undefined;
 
