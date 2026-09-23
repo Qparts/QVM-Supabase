@@ -8,7 +8,13 @@
 // the service role and talks to Mrsool itself. A key that a client can fetch is a key that
 // has left the server, whatever the UI does with it afterwards.
 //
-// API: https://logistics.staging.mrsool.co/api/docs — LaaS v1.
+// API: https://logistics.staging.mrsool.co/api/docs — LaaS v1, spec at
+// /api/docs/laas/v1/swagger.yaml.
+//
+// The paths are `/api/v1/...`. They were written `/laas/api/v1/...` here, which every call would
+// have answered with a redirect to a login page rather than a 401 — so the settings screen would
+// have reported the key as rejected and nobody would have looked at the path. Taken from the
+// published spec and confirmed against the staging server before it was changed.
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
@@ -167,14 +173,14 @@ Deno.serve(async (req) => {
     // A cheap authenticated call: if the key is wrong Mrsool answers 401, which is exactly
     // what the settings screen needs to know.
     case 'test': {
-      const r = await mrsool(cred, '/laas/api/v1/webhook_logs');
+      const r = await mrsool(cred, '/api/v1/webhook_logs');
       const good = r.status !== 401 && r.status !== 403;
       await db.from('carrier_credentials').update({
         last_test_at: new Date().toISOString(),
         last_test_ok: good,
         last_test_note: good ? `HTTP ${r.status} — ${cred.environment}` : `HTTP ${r.status} — رُفض المفتاح`,
       }).eq('carrier_id', carrierId).eq('environment', cred.environment);
-      await logCall('mrsool_test', null, '/laas/api/v1/webhook_logs', null, r.status, r.body);
+      await logCall('mrsool_test', null, '/api/v1/webhook_logs', null, r.status, r.body);
       return good
         ? ok({ environment: cred.environment, http: r.status })
         : fail(`المفتاح مرفوض من مرسول (HTTP ${r.status})`, 400);
@@ -197,10 +203,10 @@ Deno.serve(async (req) => {
         pickup: { latitude: String(pickup.latitude), longitude: String(pickup.longitude) },
         dropoff: { latitude: String(dropoff.latitude), longitude: String(dropoff.longitude) },
       };
-      const r = await mrsool(cred, '/laas/api/v1/orders/calculate_price', {
+      const r = await mrsool(cred, '/api/v1/orders/calculate_price', {
         method: 'POST', body: JSON.stringify(payload),
       });
-      await logCall('mrsool_price', String(shipmentId), '/laas/api/v1/orders/calculate_price',
+      await logCall('mrsool_price', String(shipmentId), '/api/v1/orders/calculate_price',
                     payload, r.status, r.body);
       if (!r.okHttp) return fail(`تعذّر حساب السعر (HTTP ${r.status})`, 400);
       const price = (r.body as Record<string, unknown>)?.data ?? r.body;
@@ -232,10 +238,10 @@ Deno.serve(async (req) => {
         partner_order_id: s.order_id ?? undefined,
         pickup_type: 'shop_pickup',
       };
-      const r = await mrsool(cred, '/laas/api/v1/orders', {
+      const r = await mrsool(cred, '/api/v1/orders', {
         method: 'POST', body: JSON.stringify(payload),
       });
-      await logCall('mrsool_create', String(shipmentId), '/laas/api/v1/orders', payload, r.status, r.body);
+      await logCall('mrsool_create', String(shipmentId), '/api/v1/orders', payload, r.status, r.body);
       if (!r.okHttp) return fail(`تعذّر إنشاء الشحنة لدى مرسول (HTTP ${r.status})`, 400);
 
       const d = ((r.body as Record<string, any>)?.data ?? r.body) as Record<string, any>;
@@ -253,8 +259,8 @@ Deno.serve(async (req) => {
     case 'cancel': {
       const ref = String(body.tracking_ref ?? '');
       if (!ref) return fail('tracking_ref is required');
-      const r = await mrsool(cred, `/laas/api/v1/orders/${ref}/cancel`, { method: 'POST' });
-      await logCall('mrsool_cancel', ref, `/laas/api/v1/orders/${ref}/cancel`, null, r.status, r.body);
+      const r = await mrsool(cred, `/api/v1/orders/${ref}/cancel`, { method: 'POST' });
+      await logCall('mrsool_cancel', ref, `/api/v1/orders/${ref}/cancel`, null, r.status, r.body);
       if (!r.okHttp) return fail(`تعذّر الإلغاء لدى مرسول (HTTP ${r.status})`, 400);
       await db.rpc('carrier_status_apply', {
         p_tracking_ref: ref, p_carrier_status: 'CANCELED', p_payload: r.body,
@@ -265,7 +271,7 @@ Deno.serve(async (req) => {
     case 'awb': {
       const ref = String(body.tracking_ref ?? url.searchParams.get('tracking_ref') ?? '');
       if (!ref) return fail('tracking_ref is required');
-      const r = await mrsool(cred, `/laas/api/v1/orders/${ref}/air_waybill`);
+      const r = await mrsool(cred, `/api/v1/orders/${ref}/air_waybill`);
       if (!r.okHttp) return fail(`تعذّر جلب بوليصة الشحن (HTTP ${r.status})`, 400);
       return ok(r.body);
     }
@@ -277,10 +283,10 @@ Deno.serve(async (req) => {
       const ref = String(body.tracking_ref ?? '');
       const next = String(body.status ?? '');
       if (!ref || !next) return fail('tracking_ref and status are required');
-      const r = await mrsool(cred, `/laas/api/v1/orders/${ref}/test_status`, {
+      const r = await mrsool(cred, `/api/v1/orders/${ref}/test_status`, {
         method: 'POST', body: JSON.stringify({ status: next }),
       });
-      await logCall('mrsool_test_status', ref, `/laas/api/v1/orders/${ref}/test_status`,
+      await logCall('mrsool_test_status', ref, `/api/v1/orders/${ref}/test_status`,
                     { status: next }, r.status, r.body);
       if (!r.okHttp) return fail(`تعذّر تغيير الحالة (HTTP ${r.status})`, 400);
       return ok(r.body);
@@ -290,7 +296,7 @@ Deno.serve(async (req) => {
     case 'sync': {
       const ref = String(body.tracking_ref ?? '');
       if (!ref) return fail('tracking_ref is required');
-      const r = await mrsool(cred, `/laas/api/v1/orders/${ref}`);
+      const r = await mrsool(cred, `/api/v1/orders/${ref}`);
       if (!r.okHttp) return fail(`تعذّر قراءة الشحنة (HTTP ${r.status})`, 400);
       const d = ((r.body as Record<string, any>)?.data ?? r.body) as Record<string, any>;
       if (d?.status) {
