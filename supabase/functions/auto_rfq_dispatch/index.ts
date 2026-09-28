@@ -24,7 +24,7 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const VENDOR_ITEM_STATUS_SENT = 157;
 
-type Claimed = { send_id: number; rule_id: number | null; quotation_item_id: number; vendor_id: number; vendor_branch_id: number | null; trigger_status: number };
+type Claimed = { send_id: number; rule_id: number | null; quotation_item_id: number; vendor_id: number; vendor_branch_id: number | null; trigger_status: number; source?: 'rule' | 'stock'; stock_cost?: number | null; stock_qty?: number | null };
 type Payload = {
   order: { quotation_id: number; order_number: string; plate_number: string | null; created_at: string } | null;
   car: { vin: string | null; make: string | null; model: string | null; year: number | null } | null;
@@ -171,6 +171,13 @@ Deno.serve(async (req) => {
 
       await db.rpc("auto_rfq_mark", { p_send_ids: sendIds, p_status: ok ? "sent" : "failed", p_error: ok ? null : message, p_webhook_log_id: log?.id ?? null });
       if (ok) {
+        // Lines queued because the branch's stock file holds the part are priced from that file
+        // (price and quantity as they stood when the line was queued), marked priced and stamped
+        // price_source = 'stock_file'. The vendor's screens keep such a line open to change; a
+        // line the vendor already priced is left alone.
+        if (vendorGroups.some((g) => g.rows.some((r) => r.source === "stock"))) {
+          try { await db.rpc("auto_rfq_apply_stock_prices", { p_send_ids: sendIds }); } catch { /* the RFQ itself went out; the price can be applied on retry */ }
+        }
         for (const qv of Array.from(new Set(created.map((r) => r.quotation_vendor_id))).filter(Boolean)) {
           try { await db.rpc("update_vendor_status", { p_quotation_vendor_id: qv }); } catch { /* aggregate only */ }
         }
