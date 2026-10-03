@@ -8,7 +8,9 @@
 //   refine   { prompt, report_id }           → the report's recipe, changed as asked
 //   insights { report_id }                   → the insights rewritten over the report's fresh data
 //
-// Secrets: ANTHROPIC_API_KEY (required), AI_REPORT_MODEL (optional, default claude-opus-5-5).
+// Secrets: ANTHROPIC_API_KEY (required), ANTHROPIC_WORKSPACE_ID (required with a user-scoped
+// sk-ant-usr key, which must name the workspace it bills; not needed with a workspace key),
+// AI_REPORT_MODEL (optional, default claude-opus-5-5).
 
 import Anthropic from "npm:@anthropic-ai/sdk";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -64,7 +66,9 @@ Deno.serve(async (req) => {
     existing = data as Record<string, unknown>;
   }
 
-  const anthropic = new Anthropic({ apiKey });
+  // A user-scoped key must say which workspace it works in; a workspace-scoped key already knows.
+  const workspaceId = Deno.env.get("ANTHROPIC_WORKSPACE_ID");
+  const anthropic = new Anthropic({ apiKey, ...(workspaceId ? { defaultHeaders: { "anthropic-workspace-id": workspaceId } } : {}) });
   const tools = [...reportToolDefinitions(), COMPOSE_TOOL] as unknown as Anthropic.Beta.BetaToolUnion[];
 
   // What the model is asked, per mode.
