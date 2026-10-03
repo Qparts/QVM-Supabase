@@ -6,7 +6,12 @@
 
 export type ReportToolName =
   | "requests_by_status" | "requests_over_time" | "confirmation_time_by_branch" | "vendor_response_times"
-  | "purchase_totals_by_vendor" | "order_value_by_branch" | "top_parts" | "returns_summary" | "account_manager_workload";
+  | "purchase_totals_by_vendor" | "order_value_by_branch" | "top_parts" | "returns_summary"
+  | "account_manager_workload" | "delivery_pipeline" | "delivery_lead_time" | "orders_by_delivery_type"
+  | "orders_by_order_type" | "purchase_cycle_time" | "supplier_invoice_lag" | "invoicing_status"
+  | "invoice_aging" | "sales_vs_cost_margin" | "margin_over_time" | "cancellations_summary"
+  | "vendor_fill_rate" | "vendor_price_rank" | "extract_pn_turnaround" | "tendering_turnaround"
+  | "branch_overview" | "monthly_summary" | "stock_coverage";
 
 export const RANGES = ["last_7_days", "last_30_days", "last_90_days", "last_12_months", "this_month", "last_month", "this_year", "custom"] as const;
 export const VISUALS = ["kpi", "bar", "line", "table"] as const;
@@ -32,6 +37,24 @@ export const REPORT_TOOLS: ReportToolDef[] = [
   { name: "top_parts", description: "The most requested parts (description and part number) with request count and total quantity, for orders created in the range.", columns: ["part", "part_number", "requests", "quantity"], visuals: ["table", "bar"] },
   { name: "returns_summary", description: "Returned lines by return type, with quantities, for lines updated in the range.", columns: ["return_type", "lines", "quantity"], visuals: ["bar", "table", "kpi"] },
   { name: "account_manager_workload", description: "Per account manager: orders handled, still open, and confirmed, for orders created in the range.", columns: ["account_manager", "orders", "open_orders", "confirmed_orders"], visuals: ["table", "bar"] },
+  { name: "delivery_pipeline", description: "Per branch: how many confirmed lines are processing, out for delivery, awaiting delivery-note signature, delivered, and invoiced or settled, for orders confirmed in the range.", columns: ["branch", "processing", "out_for_delivery", "dn_sign_pending", "delivered", "invoiced_or_settled"], visuals: ["table", "bar"] },
+  { name: "delivery_lead_time", description: "Per branch: deliveries and the hours from confirmation to delivery (average and median), for deliveries in the range.", columns: ["branch", "deliveries", "avg_hours", "median_hours"], visuals: ["bar", "table", "kpi"] },
+  { name: "orders_by_delivery_type", description: "Orders, lines and confirmed orders by delivery type (speed, same-day, standard), for orders created in the range.", columns: ["delivery_type", "orders", "lines", "confirmed_orders"], visuals: ["bar", "table"] },
+  { name: "orders_by_order_type", description: "Orders, lines and confirmed orders by order type (service order, stock), for orders created in the range.", columns: ["order_type", "orders", "lines", "confirmed_orders"], visuals: ["bar", "table"] },
+  { name: "purchase_cycle_time", description: "Per vendor: purchase orders and the hours from confirmation to the purchase order (average and median), for POs raised in the range.", columns: ["vendor", "purchase_orders", "avg_hours_to_po", "median_hours_to_po"], visuals: ["bar", "table"] },
+  { name: "supplier_invoice_lag", description: "Per vendor: purchase orders, how many have the supplier invoice uploaded, how many are missing it, and the average days to upload, for POs raised in the range.", columns: ["vendor", "purchase_orders", "invoices_uploaded", "missing_invoices", "avg_days_to_invoice"], visuals: ["table", "bar"] },
+  { name: "invoicing_status", description: "Per branch: delivered lines, lines invoiced to the customer, settled lines, and delivered lines still awaiting an invoice, for orders confirmed in the range.", columns: ["branch", "delivered_lines", "invoiced_lines", "settled_lines", "awaiting_invoice"], visuals: ["table", "bar"] },
+  { name: "invoice_aging", description: "Per branch: customer invoices issued, paid, open, overdue, and average days to pay, for invoices issued in the range.", columns: ["branch", "invoices", "paid", "open", "overdue", "avg_days_to_pay"], visuals: ["table", "bar", "kpi"] },
+  { name: "sales_vs_cost_margin", description: "Per branch: confirmed lines, revenue before VAT, purchase cost, margin and margin %, for orders confirmed in the range.", columns: ["branch", "lines", "revenue_before_vat", "purchase_cost", "margin", "margin_pct"], visuals: ["bar", "table", "kpi"] },
+  { name: "margin_over_time", description: "Revenue, purchase cost and margin % per period (day/week/month), for orders confirmed in the range.", columns: ["period", "lines", "revenue_before_vat", "purchase_cost", "margin_pct"], visuals: ["line", "table"], buckets: true },
+  { name: "cancellations_summary", description: "Cancelled lines and orders by cancellation reason, for orders created in the range.", columns: ["reason", "lines", "orders"], visuals: ["bar", "table"] },
+  { name: "vendor_fill_rate", description: "Per vendor: lines sent, lines priced, lines won (bought), fill rate % and win rate %, for requests sent in the range.", columns: ["vendor", "lines_sent", "lines_priced", "lines_won", "fill_rate_pct", "win_rate_pct"], visuals: ["table", "bar"] },
+  { name: "vendor_price_rank", description: "Per vendor: priced lines, how often they were the cheapest offer, % cheapest, average rank among competing offers, for orders created in the range.", columns: ["vendor", "priced_lines", "cheapest", "pct_cheapest", "avg_rank", "avg_competitors"], visuals: ["table", "bar"] },
+  { name: "extract_pn_turnaround", description: "Per branch: orders and the hours from request to the part numbers being ready for quotation (average and median), for orders created in the range.", columns: ["branch", "orders", "avg_hours", "median_hours"], visuals: ["bar", "table"] },
+  { name: "tendering_turnaround", description: "Per branch: orders sent to vendors, orders that received an offer, and the average hours to the first offer, for orders created in the range.", columns: ["branch", "orders_sent", "orders_priced", "avg_hours_to_first_offer"], visuals: ["bar", "table"] },
+  { name: "branch_overview", description: "One row per branch: orders, lines, confirmed orders, delivered lines, confirmed value and average confirmation hours, for orders created in the range.", columns: ["branch", "orders", "lines", "confirmed_orders", "delivered_lines", "confirmed_value", "avg_confirmation_hours"], visuals: ["table"] },
+  { name: "monthly_summary", description: "One row per month: orders, lines, confirmed orders and confirmed value, for orders created in the range.", columns: ["period", "orders", "lines", "confirmed_orders", "confirmed_value"], visuals: ["line", "table"] },
+  { name: "stock_coverage", description: "Per vendor with a stock file: distinct parts requested in the range, how many that vendor holds, and the coverage %.", columns: ["vendor", "requested_parts", "parts_in_stock", "coverage_pct"], visuals: ["bar", "table"] },
 ];
 
 /** The parameters every tool takes — the same object the database function reads. Strict schema: every key present, nullable where optional. */
