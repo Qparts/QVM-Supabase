@@ -629,3 +629,13 @@ verify_jwt = false
 [functions.write_price_to_sheet]
 enabled = true
 verify_jwt = false
+
+# The AI reports: the composer needs the user's JWT; the MCP server authenticates its own bearer
+# tokens (personal access tokens made on the profile), so the gateway must let them through.
+[functions.ai_report]
+enabled = true
+verify_jwt = true
+
+[functions.mcp_reports]
+enabled = true
+verify_jwt = false
