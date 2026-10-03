@@ -89,7 +89,7 @@ const SPEC_SCHEMA = {
           params: PARAMS_SCHEMA,
           visual: { type: "string", enum: [...VISUALS] },
           title: { type: "string" },
-          insight: { type: ["string", "null"] },
+          insight: { type: "string" },
         },
         required: ["tool", "params", "visual", "title"],
       },

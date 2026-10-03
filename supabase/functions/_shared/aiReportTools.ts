@@ -39,23 +39,28 @@ export const PARAMS_SCHEMA = {
   type: "object",
   properties: {
     range: { type: "string", enum: [...RANGES], description: "The period. Prefer a relative range so a refreshed report moves with time; use custom only when the user names fixed dates." },
-    date_from: { type: ["string", "null"], description: "ISO date, only with range=custom." },
-    date_to: { type: ["string", "null"], description: "ISO date, only with range=custom." },
-    branch_ids: { type: ["array", "null"], items: { type: "integer" }, description: "Restrict to these branch ids; null for all branches the user may see." },
-    bucket: { type: ["string", "null"], enum: ["day", "week", "month", null], description: "Only for requests_over_time." },
-    limit: { type: ["integer", "null"], description: "Rows to return, 1–200; null for the default 50." },
+    date_from: { type: "string", description: "ISO date, only with range=custom; otherwise an empty string." },
+    date_to: { type: "string", description: "ISO date, only with range=custom; otherwise an empty string." },
+    branch_ids: { type: "array", items: { type: "integer" }, description: "Restrict to these branch ids; an empty list means every branch the user may see." },
+    bucket: { type: "string", enum: ["day", "week", "month"], description: "The period length for requests_over_time; other tools ignore it (send week)." },
+    limit: { type: "integer", description: "Rows to return, 1–200; 50 is the usual choice." },
   },
+  // Every key present, each with one type: the strict grammar allows few nullable parameters
+  // across all tools, so «none» is an empty string or an empty list, which the database reads as such.
   required: ["range", "date_from", "date_to", "branch_ids", "bucket", "limit"],
   additionalProperties: false,
 } as const;
 
-/** The tools as the Claude API takes them (strict: inputs arrive exactly in this shape). */
+/**
+ * The tools as the Claude API takes them. Only compose_report is strict: ten strict tools compile
+ * to a grammar the API refuses as too large, and the database validates every tool's parameters
+ * itself, so a loosely shaped input here costs nothing.
+ */
 export function reportToolDefinitions() {
   return REPORT_TOOLS.map((t) => ({
     name: t.name,
     description: `${t.description} Returns rows with columns: ${t.columns.join(", ")}.`,
     input_schema: PARAMS_SCHEMA,
-    strict: true,
   }));
 }
 
@@ -68,9 +73,8 @@ export const COMPOSE_TOOL = {
     properties: {
       title: { type: "string", description: "A short title for the report, in the user's language." },
       sections: {
+        // 1–8 sections; strict schemas take no minItems/maxItems, so the server enforces the count.
         type: "array",
-        minItems: 1,
-        maxItems: 8,
         items: {
           type: "object",
           properties: {
@@ -78,7 +82,7 @@ export const COMPOSE_TOOL = {
             params: PARAMS_SCHEMA,
             visual: { type: "string", enum: [...VISUALS], description: "kpi shows the first row's first measure as one big number; bar and line chart the first measure by the label column; table shows every column." },
             title: { type: "string", description: "The section's heading, in the user's language." },
-            insight: { type: ["string", "null"], description: "One or two sentences on what the data shows, written from the numbers you saw; null if nothing is worth saying." },
+            insight: { type: "string", description: "One or two sentences on what the data shows, written from the numbers you saw; an empty string if nothing is worth saying." },
           },
           required: ["tool", "params", "visual", "title", "insight"],
           additionalProperties: false,
