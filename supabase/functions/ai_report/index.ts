@@ -69,7 +69,12 @@ Deno.serve(async (req) => {
   // A user-scoped key must say which workspace it works in; a workspace-scoped key already knows.
   const workspaceId = Deno.env.get("ANTHROPIC_WORKSPACE_ID");
   const anthropic = new Anthropic({ apiKey, ...(workspaceId ? { defaultHeaders: { "anthropic-workspace-id": workspaceId } } : {}) });
-  const tools = [...reportToolDefinitions(), COMPOSE_TOOL] as unknown as Anthropic.Beta.BetaToolUnion[];
+  // The system prompt and the tool catalogue are the same for every request and every turn of the
+  // loop, so they are cached: the prefix is read, not re-billed, on the turns and reports that follow.
+  const defs = [...reportToolDefinitions(), COMPOSE_TOOL] as unknown as Array<Record<string, unknown>>;
+  defs[defs.length - 1] = { ...defs[defs.length - 1], cache_control: { type: "ephemeral" } };
+  const tools = defs as unknown as Anthropic.Beta.BetaToolUnion[];
+  const system = [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }] as unknown as Anthropic.Beta.BetaTextBlockParam[];
 
   // What the model is asked, per mode.
   let userText: string;
@@ -83,7 +88,7 @@ Deno.serve(async (req) => {
   }
   const messages: Anthropic.Beta.BetaMessageParam[] = [{ role: "user", content: userText }];
 
-  let inputTokens = 0, outputTokens = 0;
+  let inputTokens = 0, outputTokens = 0, cachedTokens = 0;
   const toolCalls: Array<{ tool: string; params: unknown; rows: number }> = [];
 
   try {
@@ -93,13 +98,14 @@ Deno.serve(async (req) => {
         max_tokens: 16000,
         betas: ["server-side-fallback-2026-07-01"],
         fallbacks: "default",
-        system: SYSTEM_PROMPT,
+        system,
         tools,
         tool_choice: { type: "auto" },
         messages,
       } as unknown as Anthropic.Beta.MessageCreateParamsNonStreaming);
       inputTokens += response.usage.input_tokens;
       outputTokens += response.usage.output_tokens;
+      cachedTokens += Number((response.usage as unknown as Record<string, number>).cache_read_input_tokens ?? 0);
 
       if (response.stop_reason === "refusal") {
         return json({ status: "fail", message: "The model declined this request. Please rephrase it." }, 422);
@@ -135,7 +141,7 @@ Deno.serve(async (req) => {
           p_report_id: (report as Record<string, unknown>).report_id, p_action: mode, p_prompt: prompt || null, p_model: MODEL,
           p_input_tokens: inputTokens, p_output_tokens: outputTokens, p_client: "web",
         });
-        return json({ status: "success", report, usage: { input_tokens: inputTokens, output_tokens: outputTokens, tool_calls: toolCalls } });
+        return json({ status: "success", report, usage: { input_tokens: inputTokens, output_tokens: outputTokens, cache_read_input_tokens: cachedTokens, tool_calls: toolCalls } });
       }
 
       // Report tools: run each in the database as the user, hand the rows back together.

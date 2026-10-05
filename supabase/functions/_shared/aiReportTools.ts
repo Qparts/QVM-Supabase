@@ -116,11 +116,24 @@ export const PARAMS_SCHEMA = {
  * to a grammar the API refuses as too large, and the database validates every tool's parameters
  * itself, so a loosely shaped input here costs nothing.
  */
+/** The seven parameters a named tool reads. The general query's long schema is sent once, on compose_report. */
+const SHORT_KEYS = ["range", "date_from", "date_to", "branch_ids", "bucket", "limit", "search"] as const;
+export const SHORT_PARAMS_SCHEMA = {
+  type: "object",
+  properties: Object.fromEntries(SHORT_KEYS.map((k) => [k, PARAMS_SCHEMA.properties[k]])),
+  required: [...SHORT_KEYS],
+  additionalProperties: false,
+} as const;
+const QUERY_TOOLS = new Set<string>(["query_metrics", "query_lines"]);
+
 export function reportToolDefinitions() {
   return REPORT_TOOLS.map((t) => ({
     name: t.name,
     description: `${t.description} Returns rows with columns: ${t.columns.join(", ")}.`,
-    input_schema: PARAMS_SCHEMA,
+    // Forty named tools repeating the forty-measure schema cost a quarter of a million input
+    // tokens a report; each now carries only what it reads. The full schema rides on the two
+    // query tools and once on compose_report, whose sections may name any tool.
+    input_schema: QUERY_TOOLS.has(t.name) ? PARAMS_SCHEMA : SHORT_PARAMS_SCHEMA,
   }));
 }
 
