@@ -8,7 +8,11 @@
 // Who may call: a signed-in Qparts Admin (checked through the database as that user). What it
 // touches: the one row it is asked about, read and written through service-role-only functions.
 // Secrets: NETLIFY_AUTH_TOKEN (a Netlify personal access token), NETLIFY_SITE_ID (the site that
-// serves the base domain).
+// serves the base domain), and optionally NETLIFY_DNS_ZONE_ID (the Netlify DNS zone of the base
+// domain). The zone carries a wildcard A record to Netlify's load balancer, because some networks
+// cannot reach Netlify's regional edge addresses; when an alias is added Netlify also writes a
+// NETLIFY record for that one host, which would send it to the edge again, so that record is
+// removed and the wildcard answers for it.
 //
 // Body: { domain_id: number, action?: "add" | "remove" }. The action defaults from the row's state:
 // a disabled row is removed, anything else is added.
@@ -75,6 +79,21 @@ Deno.serve(async (req) => {
     if (action === "remove" && aliases.includes(host)) next = aliases.filter((a) => a !== host);
     if (next !== aliases) {
       await netlify(`/sites/${siteId}`, token, { method: "PATCH", body: JSON.stringify({ domain_aliases: next }) });
+    }
+    // Keep the host on the wildcard: drop the edge-pointing record Netlify writes for a new alias.
+    const zoneId = Deno.env.get("NETLIFY_DNS_ZONE_ID");
+    if (zoneId && action === "add") {
+      try {
+        const records = await netlify(`/dns_zones/${zoneId}/dns_records`, token) as unknown as Array<Record<string, unknown>>;
+        for (const r of records) {
+          if (r.type === "NETLIFY" && String(r.hostname).toLowerCase() === host.toLowerCase()) {
+            await netlify(`/dns_zones/${zoneId}/dns_records/${r.id}`, token, { method: "DELETE" });
+          }
+        }
+      } catch (e) {
+        // The host still works through the edge where that is reachable; the record can be removed by hand.
+        console.warn("could not tidy the DNS record for", host, String((e as Error)?.message || e));
+      }
     }
     const status = action === "add" ? "active" : "disabled";
     const { data: marked, error: markErr } = await admin.rpc("mark_company_domain", { p_domain_id: domainId, p_status: status, p_error: null });
