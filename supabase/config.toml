@@ -641,3 +641,7 @@ verify_jwt = true
 [functions.mcp_reports]
 enabled = true
 verify_jwt = false
+
+[functions.provision_company_domain]
+enabled = true
+verify_jwt = true
