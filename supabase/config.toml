@@ -633,3 +633,11 @@ verify_jwt = false
 [functions.write_price_to_sheet]
 enabled = true
 verify_jwt = false
+
+[functions.ai_report]
+enabled = true
+verify_jwt = true
+
+[functions.mcp_reports]
+enabled = true
+verify_jwt = false
