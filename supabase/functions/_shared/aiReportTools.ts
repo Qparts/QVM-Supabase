@@ -12,7 +12,9 @@ export type ReportToolName =
   | "invoice_aging" | "sales_vs_cost_margin" | "margin_over_time" | "cancellations_summary"
   | "vendor_fill_rate" | "vendor_price_rank" | "extract_pn_turnaround" | "tendering_turnaround"
   | "branch_overview" | "monthly_summary" | "stock_coverage"
-  | "approvals_summary" | "shipments_summary" | "receipt_status_by_vendor";
+  | "approvals_summary" | "shipments_summary" | "receipt_status_by_vendor"
+  | "open_orders" | "order_lines" | "requests_by_car_brand" | "orders_by_service_advisor" | "spend_by_part_category"
+  | "margin_by_vendor" | "discounts_summary" | "vat_summary" | "part_price_history" | "stock_value_by_vendor";
 
 export const RANGES = ["last_7_days", "last_30_days", "last_90_days", "last_12_months", "this_month", "last_month", "this_year", "custom"] as const;
 export const VISUALS = ["kpi", "bar", "line", "table"] as const;
@@ -59,6 +61,16 @@ export const REPORT_TOOLS: ReportToolDef[] = [
   { name: "approvals_summary", description: "Quotation approval rounds per audience (workshop, end customer): rounds sent, approved, rejected, revision requested, pending, and the average hours to a decision, for rounds sent in the range.", columns: ["audience", "rounds", "approved", "rejected", "revision_requested", "pending", "avg_hours_to_decide"], visuals: ["bar", "table", "kpi"] },
   { name: "shipments_summary", description: "Shipments by status (dispatched, in transit, delivered, failed…): count, average hours from dispatch to delivery, total carrier cost and total price charged, for shipments created in the range.", columns: ["status", "shipments", "avg_hours_to_deliver", "total_cost", "total_price"], visuals: ["bar", "table", "kpi"] },
   { name: "receipt_status_by_vendor", description: "Per vendor: purchase lines and how they arrived — received in full, short (lower quantity), not received — and the quantity returned to the vendor, for purchase orders raised in the range.", columns: ["vendor", "lines", "received", "lower_qty", "not_received", "returned_qty"], visuals: ["table", "bar"] },
+  { name: "open_orders", description: "The individual orders still in flight (at least one line not settled or cancelled), newest first: order number, branch, date, age in days, lines, open lines, the prevailing status and value. Use search to narrow to an order number or plate.", columns: ["order_number", "branch", "created_on", "age_days", "lines", "open_lines", "status", "value_before_vat"], visuals: ["table"] },
+  { name: "order_lines", description: "Individual quotation lines, newest first: order number, branch, part number, description, car brand, quantity, unit price, status and date. Use search for one order number or one part number; without it, the latest lines in the range.", columns: ["order_number", "branch", "part_number", "part", "brand", "qty", "unit_price", "status", "created_on"], visuals: ["table"] },
+  { name: "requests_by_car_brand", description: "Lines, orders, confirmed lines and confirmed value by the vehicle's brand (Toyota, Hyundai…), for orders created in the range.", columns: ["car_brand", "lines", "orders", "confirmed_lines", "value_before_vat"], visuals: ["bar", "table"] },
+  { name: "orders_by_service_advisor", description: "Per service advisor: orders raised, lines, confirmed orders and confirmed value, for orders created in the range.", columns: ["service_advisor", "orders", "lines", "confirmed_orders", "confirmed_value"], visuals: ["table", "bar"] },
+  { name: "spend_by_part_category", description: "Per part category: confirmed lines, quantity, value before VAT and purchase cost, for orders confirmed in the range.", columns: ["part_category", "lines", "quantity", "value_before_vat", "purchase_cost"], visuals: ["bar", "table"] },
+  { name: "margin_by_vendor", description: "Per vendor the parts were bought from: bought lines, revenue before VAT, purchase cost, margin and margin %, for purchase orders raised in the range.", columns: ["vendor", "lines", "revenue_before_vat", "purchase_cost", "margin", "margin_pct"], visuals: ["bar", "table", "kpi"] },
+  { name: "discounts_summary", description: "Per branch: lines, lines carrying a discount, average and maximum discount %, and value before VAT, for orders created in the range.", columns: ["branch", "lines", "discounted_lines", "avg_discount_pct", "max_discount_pct", "value_before_vat"], visuals: ["table", "bar"] },
+  { name: "vat_summary", description: "Customer invoices per month (or day/week with bucket): invoices, subtotal, VAT, total and amount paid, for invoices issued in the range.", columns: ["period", "invoices", "subtotal", "vat", "total", "paid"], visuals: ["line", "table", "kpi"], buckets: true },
+  { name: "part_price_history", description: "One part's vendor offers over time, per month and vendor: offers, minimum, average and maximum cost, and the average customer price. search MUST be the part number.", columns: ["period", "vendor", "offers", "min_cost", "avg_cost", "max_cost", "avg_customer_price"], visuals: ["line", "table"] },
+  { name: "stock_value_by_vendor", description: "The vendors' stock files as they stand now (no date range): parts, available parts, units, and value at wholesale and at retail. search narrows to a vendor name.", columns: ["vendor", "parts", "available_parts", "units", "wholesale_value", "retail_value"], visuals: ["bar", "table", "kpi"] },
 ];
 
 /** The parameters every tool takes — the same object the database function reads. Strict schema: every key present, nullable where optional. */
@@ -71,10 +83,11 @@ export const PARAMS_SCHEMA = {
     branch_ids: { type: "array", items: { type: "integer" }, description: "Restrict to these branch ids; an empty list means every branch the user may see." },
     bucket: { type: "string", enum: ["day", "week", "month"], description: "The period length for requests_over_time; other tools ignore it (send week)." },
     limit: { type: "integer", description: "Rows to return, 1–200; 50 is the usual choice." },
+    search: { type: "string", description: "A text filter — an order number, a plate number, a part number or a vendor name — for the tools that say they use it; an empty string otherwise." },
   },
   // Every key present, each with one type: the strict grammar allows few nullable parameters
   // across all tools, so «none» is an empty string or an empty list, which the database reads as such.
-  required: ["range", "date_from", "date_to", "branch_ids", "bucket", "limit"],
+  required: ["range", "date_from", "date_to", "branch_ids", "bucket", "limit", "search"],
   additionalProperties: false,
 } as const;
 
