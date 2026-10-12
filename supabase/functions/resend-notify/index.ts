@@ -1,7 +1,8 @@
 // Central email sender (Resend). Reads RESEND_API_KEY + RESEND_FROM from env — the
 // key is NEVER hardcoded. Outlook (send-email) is kept but no longer used as primary.
 //
-// POST body: { to: string | string[], subject: string, html: string, from?: string, reply_to?: string }
+// POST body: { to: string | string[], subject: string, html: string, from?: string, reply_to?: string,
+//              attachments?: { filename: string, path: string }[] }  — files Resend fetches by URL
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 const cors = {
@@ -36,6 +37,14 @@ Deno.serve(async (req: Request) => {
 
     const payload: Record<string, unknown> = { from, to: recipients, subject, html };
     if (reply_to) payload.reply_to = reply_to;
+    // Files go by URL: Resend downloads each one. At most 10, each needs a name and an https link.
+    const attachments = Array.isArray(body?.attachments)
+      ? body.attachments
+          .map((a: any) => ({ filename: String(a?.filename || '').trim(), path: String(a?.path || '').trim() }))
+          .filter((a: { filename: string; path: string }) => a.filename && /^https:\/\//.test(a.path))
+          .slice(0, 10)
+      : [];
+    if (attachments.length) payload.attachments = attachments;
 
     const resp = await fetch("https://api.resend.com/emails", {
       method: "POST",
