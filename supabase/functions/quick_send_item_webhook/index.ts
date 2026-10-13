@@ -57,7 +57,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    const created: Array<{ vendor_id: number; vendor_branch_id: number | null; access_token: string }> =
+    const created: Array<{ vendor_id: number; vendor_branch_id: number | null; access_token: string; cost_id?: number | null }> =
       Array.isArray(rpcData.created) ? rpcData.created : [];
     const baseOrigin = (origin && String(origin).trim()) || "https://qparts.store";
 
@@ -105,6 +105,10 @@ Deno.serve(async (req) => {
       vendor_list.push({
         email, vendor_name, phone, notification_method,
         unique_vendor_url: v.access_token ? `${baseOrigin}/#/quote-access/${v.access_token}` : null,
+        // This vendor's item, with the vendor quotation item it is priced on.
+        item_list: (Array.isArray(rpcData.item_list) ? rpcData.item_list : []).map((it: any) => ({
+          ...it, cost_id: v.cost_id ?? null, vendor_quotation_item_id: v.cost_id ?? null,
+        })),
       });
     }
 

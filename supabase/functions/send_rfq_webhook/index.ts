@@ -194,6 +194,9 @@ interface CreatedRow {
   vendor_id: number;
   vendor_branch_id: number | null;
   access_token: string;
+  /** The line this row is for, and the vendor's own row for it (quotation_vendor_items.cost_id). */
+  quotation_item_id?: number;
+  cost_id?: number | null;
 }
 
 async function logAttempt(params: {
@@ -278,25 +281,45 @@ Deno.serve(async (req) => {
       }
 
       const tokenByVendor = new Map<string, string>();
+      // Each vendor's own row per line — the cost_id their price is written to.
+      const costByVendor = new Map<string, Map<number, number>>();
       for (const row of createdRows) {
         const key = vendorKey(row.vendor_id, row.vendor_branch_id);
         if (!tokenByVendor.has(key)) tokenByVendor.set(key, row.access_token);
+        if (row.quotation_item_id != null && row.cost_id != null) {
+          if (!costByVendor.has(key)) costByVendor.set(key, new Map());
+          costByVendor.get(key)!.set(Number(row.quotation_item_id), Number(row.cost_id));
+        }
       }
+      // The items as the page sent them, each with its line id. Older pages sent no id: the lines
+      // are then matched by position to quotation_items, which the page builds in the same order.
+      const sentLines = Array.isArray(quotation_items) ? (quotation_items as Array<{ quotation_item_id?: number }>) : [];
+      const baseItems = (webhook_payload_base.item_list ?? []).map((it: any, idx: number) => {
+        const qid = it?.quotation_item_id ?? sentLines[idx]?.quotation_item_id ?? null;
+        return { ...it, quotation_item_id: qid != null ? Number(qid) : null };
+      });
 
       const finalPayload = {
         order_number: webhook_payload_base.order_number,
         date: webhook_payload_base.date,
         type: webhook_payload_base.type,
         car_data: webhook_payload_base.car_data,
-        item_list: webhook_payload_base.item_list,
+        item_list: baseItems,
         vendor_list: webhook_payload_base.vendor_list.map((v) => {
-          const token = tokenByVendor.get(vendorKey(v.vendor_id, v.vendor_branch_id));
+          const key = vendorKey(v.vendor_id, v.vendor_branch_id);
+          const token = tokenByVendor.get(key);
+          const costs = costByVendor.get(key);
           return {
             email: v.email,
             vendor_name: v.vendor_name,
             phone: v.phone,
             notification_method: v.notification_method,
             unique_vendor_url: token ? `${origin}/#/quote-access/${token}` : null,
+            // This vendor's items, each with the vendor quotation item it is priced on.
+            item_list: baseItems.map((it: any) => {
+              const costId = it.quotation_item_id != null ? costs?.get(it.quotation_item_id) ?? null : null;
+              return { ...it, cost_id: costId, vendor_quotation_item_id: costId };
+            }),
           };
         }),
       };
